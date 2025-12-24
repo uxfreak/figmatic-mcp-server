@@ -1,0 +1,14 @@
+{
+  "name": "figma-ai-bridge-plugin",
+  "version": "1.0.0",
+  "description": "Figma plugin for AI agent communication",
+  "main": "code.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.99.0",
+    "typescript": "^5.0.0"
+  }
+}

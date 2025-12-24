@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Agent Bridge</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 12px;
+      padding: 16px;
+      background: var(--figma-color-bg);
+      color: var(--figma-color-text);
+      line-height: 1.5;
+    }
+
+    .header {
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--figma-color-border);
+    }
+
+    h1 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 11px;
+      color: var(--figma-color-text-secondary);
+    }
+
+    #status {
+      padding: 10px 12px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-size: 11px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #status::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .connected {
+      background: rgba(0, 200, 100, 0.1);
+      color: rgb(0, 180, 90);
+      border: 1px solid rgba(0, 200, 100, 0.3);
+    }
+    .connected::before {
+      background: rgb(0, 200, 100);
+      box-shadow: 0 0 4px rgba(0, 200, 100, 0.5);
+    }
+
+    .disconnected {
+      background: rgba(255, 60, 60, 0.1);
+      color: rgb(255, 80, 80);
+      border: 1px solid rgba(255, 60, 60, 0.3);
+    }
+    .disconnected::before {
+      background: rgb(255, 80, 80);
+    }
+
+    .waiting {
+      background: rgba(255, 170, 0, 0.1);
+      color: rgb(255, 150, 0);
+      border: 1px solid rgba(255, 170, 0, 0.3);
+    }
+    .waiting::before {
+      background: rgb(255, 170, 0);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .log-section {
+      margin-top: 16px;
+    }
+
+    .log-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--figma-color-text-secondary);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    #log {
+      background: var(--figma-color-bg-secondary);
+      border: 1px solid var(--figma-color-border);
+      border-radius: 4px;
+      padding: 8px;
+      max-height: 150px;
+      overflow-y: auto;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .log-entry {
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+
+    .log-time {
+      color: var(--figma-color-text-tertiary);
+      margin-right: 6px;
+    }
+
+    .log-message {
+      color: var(--figma-color-text-secondary);
+    }
+
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--figma-color-bg);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--figma-color-border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--figma-color-text-tertiary);
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>AI Agent Bridge</h1>
+    <div class="subtitle">WebSocket connection to local AI agent</div>
+  </div>
+
+  <div id="status" class="disconnected">
+    <span>Disconnected from server</span>
+  </div>
+
+  <div class="log-section">
+    <div class="log-header">Activity Log</div>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
+    let ws = null;
+    let reconnectInterval = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 999;
+    const RECONNECT_DELAY = 3000; // 3 seconds
+
+    // ========================================
+    // LOGGING
+    // ========================================
+    function log(message, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-message">${message}</span>`;
+      logEl.insertBefore(entry, logEl.firstChild);
+
+      // Keep only last 50 entries
+      while (logEl.children.length > 50) {
+        logEl.removeChild(logEl.lastChild);
+      }
+
+      console.log(`[${time}] ${message}`);
+    }
+
+    // ========================================
+    // WEBSOCKET CONNECTION
+    // ========================================
+    function connect() {
+      // Prevent duplicate connections
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+        console.log('Already connected or connecting');
+        return;
+      }
+
+      try {
+        log('Attempting to connect to ws://localhost:8080...');
+        ws = new WebSocket('ws://localhost:8080');
+
+        // ===== CONNECTION OPENED =====
+        ws.onopen = () => {
+          reconnectAttempts = 0;
+          statusEl.innerHTML = '<span>Connected to AI Agent</span>';
+          statusEl.className = 'connected';
+          log('✓ WebSocket connected successfully');
+
+          // Clear reconnect interval
+          if (reconnectInterval) {
+            clearInterval(reconnectInterval);
+            reconnectInterval = null;
+          }
+
+          // Send handshake to identify as Figma plugin
+          const handshake = {
+            type: 'handshake',
+            source: 'figma-plugin',
+            timestamp: Date.now(),
+            version: '1.0.0'
+          };
+          ws.send(JSON.stringify(handshake));
+          log('Sent handshake to server');
+        };
+
+        // ===== MESSAGE RECEIVED =====
+        ws.onmessage = async (event) => {
+          let data;
+          try {
+            data = JSON.parse(event.data);
+          } catch (e) {
+            log('⚠ Received invalid JSON data');
+            return;
+          }
+
+          log(`← Received: ${data.type}`);
+
+          // Forward execute command to main thread
+          if (data.type === 'execute') {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'execute-script',
+                script: data.script,
+                requestId: data.requestId
+              }
+            }, '*');
+          }
+
+          // Forward context request to main thread
+          if (data.type === 'get-context') {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'get-context',
+                requestId: data.requestId
+              }
+            }, '*');
+          }
+
+          // Forward notify message to main thread
+          if (data.type === 'notify') {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'notify',
+                message: data.message,
+                timeout: data.timeout
+              }
+            }, '*');
+          }
+
+          // Forward close command to main thread
+          if (data.type === 'close') {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'close',
+                message: data.message
+              }
+            }, '*');
+          }
+        };
+
+        // ===== ERROR =====
+        ws.onerror = (error) => {
+          log(`✗ WebSocket error: ${error.message || 'Connection failed'}`);
+          console.error('WebSocket error:', error);
+        };
+
+        // ===== CONNECTION CLOSED =====
+        ws.onclose = (event) => {
+          log(`✗ Connection closed (code: ${event.code})`);
+          statusEl.innerHTML = '<span>Disconnected - Retrying...</span>';
+          statusEl.className = 'waiting';
+
+          // Attempt to reconnect
+          if (!reconnectInterval && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectInterval = setInterval(() => {
+              reconnectAttempts++;
+              log(`Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+              connect();
+            }, RECONNECT_DELAY);
+          }
+        };
+      } catch (error) {
+        log(`✗ Connection error: ${error.message}`);
+        statusEl.innerHTML = '<span>Connection failed</span>';
+        statusEl.className = 'disconnected';
+      }
+    }
+
+    // ========================================
+    // RECEIVE FROM MAIN THREAD
+    // ========================================
+    onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        log('⚠ Cannot send message - WebSocket not connected');
+        return;
+      }
+
+      // Forward execution results
+      if (msg.type === 'execution-result') {
+        log(`→ Sending execution result (${msg.success ? 'success' : 'error'})`);
+        ws.send(JSON.stringify({
+          type: 'execution-result',
+          success: msg.success,
+          result: msg.result,
+          error: msg.error,
+          stack: msg.stack,
+          requestId: msg.requestId
+        }));
+      }
+
+      // Forward context response
+      if (msg.type === 'context-response') {
+        log('→ Sending context response');
+        ws.send(JSON.stringify({
+          type: 'context-response',
+          context: msg.context,
+          error: msg.error,
+          requestId: msg.requestId
+        }));
+      }
+    };
+
+    // ========================================
+    // INITIALIZE
+    // ========================================
+    log('AI Agent Bridge UI initialized');
+    log('Waiting for WebSocket server at ws://localhost:8080');
+    connect();
+  </script>
+</body>
+</html>

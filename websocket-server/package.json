@@ -1,0 +1,15 @@
+{
+  "name": "figma-ai-bridge-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for Figma AI Agent Bridge",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["figma", "websocket", "ai", "agent"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.0"
+  }
+}

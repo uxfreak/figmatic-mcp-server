@@ -1,0 +1,12 @@
+{
+  "name": "figma-ai-agent",
+  "version": "1.0.0",
+  "description": "AI agent integration for Figma AI Bridge",
+  "main": "agent.js",
+  "scripts": {
+    "examples": "node examples.js"
+  },
+  "keywords": ["figma", "ai", "agent"],
+  "author": "",
+  "license": "MIT"
+}

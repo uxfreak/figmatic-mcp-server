@@ -1,0 +1,29 @@
+# Node modules
+node_modules/
+**/node_modules/
+
+# Build outputs
+figma-plugin/code.js
+*.js.map
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+.cache/

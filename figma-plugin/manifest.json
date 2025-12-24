@@ -1,0 +1,15 @@
+{
+  "name": "AI Agent Bridge",
+  "id": "ai-agent-bridge",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": [
+      "ws://localhost:8080"
+    ],
+    "reasoning": "Connects to local WebSocket server (ws://localhost:8080) for AI agent communication during development. This enables bidirectional communication between the Figma plugin and external AI agents for automated design generation."
+  }
+}
