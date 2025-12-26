@@ -1,0 +1,24 @@
+{
+  "name": "figmatic-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Figmatic Progressive Disclosure API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node ../tests/mcp-manual-test.js"
+  },
+  "keywords": [
+    "mcp",
+    "figma",
+    "progressive-disclosure",
+    "ai-agents"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "axios": "^1.6.0"
+  }
+}

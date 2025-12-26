@@ -5,7 +5,7 @@
 const { generateRequestId, addPendingRequest, isClientConnected } = require('../core/state');
 const { createContextRequest } = require('../core/messageHandler');
 
-const REQUEST_TIMEOUT = 60000;
+const REQUEST_TIMEOUT = 10000; // 10 seconds
 
 /**
  * Get current Figma context

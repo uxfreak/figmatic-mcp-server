@@ -6,7 +6,7 @@
 const { generateRequestId, addPendingRequest, isClientConnected } = require('../core/state');
 const { createExecuteCommand } = require('../core/messageHandler');
 
-const REQUEST_TIMEOUT = 60000; // 60 seconds
+const REQUEST_TIMEOUT = 10000; // 10 seconds
 
 /**
  * Execute a script in Figma

@@ -1,0 +1,397 @@
+/**
+ * READ Tools - Progressive Disclosure Layers 0-4
+ *
+ * Implements 5 READ tools that expose Progressive Disclosure API layers
+ * Wraps existing example scripts and lib functions
+ */
+
+const { getCachedDesignSystem, setCachedDesignSystem } = require('../utils/cache');
+
+/**
+ * Tool 1: get_design_system
+ * Layer 0: Design System Context (cached)
+ */
+async function getDesignSystem(api, args, sendProgress) {
+  const { includeVariables = true, includeStyles = true } = args;
+
+  // Check cache first
+  const cached = getCachedDesignSystem();
+  if (cached) {
+    sendProgress({ status: 'Using cached design system (15min TTL)' });
+    return cached;
+  }
+
+  sendProgress({ status: 'Fetching design system from Figma...' });
+
+  // Execute design system audit (from 00-design-system-audit.js)
+  const result = await api.executeInFigma(`
+    const collections = await figma.variables.getLocalVariableCollectionsAsync();
+    const allVars = await figma.variables.getLocalVariablesAsync();
+    const textStyles = await figma.getLocalTextStylesAsync();
+    const paintStyles = await figma.getLocalPaintStylesAsync();
+    const effectStyles = await figma.getLocalEffectStylesAsync();
+
+    // Helper to format variable value
+    function formatValue(value, type) {
+      if (value.type === "VARIABLE_ALIAS") {
+        const aliasVar = allVars.find(v => v.id === value.id);
+        return { alias: aliasVar ? aliasVar.name : value.id };
+      }
+
+      if (type === "COLOR") {
+        const r = Math.round(value.r * 255);
+        const g = Math.round(value.g * 255);
+        const b = Math.round(value.b * 255);
+        const a = value.a !== undefined ? value.a : 1;
+        return a < 1 ? \`rgba(\${r},\${g},\${b},\${a})\` : \`rgb(\${r},\${g},\${b})\`;
+      }
+
+      if (type === "FLOAT") return value;
+
+      return value;
+    }
+
+    const varsByCollection = {};
+    collections.forEach(col => {
+      const vars = allVars.filter(v => v.variableCollectionId === col.id);
+      varsByCollection[col.name] = {
+        modes: col.modes.map(m => ({ name: m.name, modeId: m.modeId })),
+        variables: vars.map(v => {
+          const valuesByMode = {};
+          Object.entries(v.valuesByMode).forEach(([modeId, value]) => {
+            const mode = col.modes.find(m => m.modeId === modeId);
+            const modeName = mode ? mode.name : modeId;
+            valuesByMode[modeName] = formatValue(value, v.resolvedType);
+          });
+
+          return {
+            name: v.name,
+            type: v.resolvedType,
+            values: valuesByMode
+          };
+        })
+      };
+    });
+
+    return {
+      collections: ${includeVariables} ? varsByCollection : {},
+      textStyles: ${includeStyles} ? textStyles.map(s => ({
+        name: s.name,
+        id: s.id,
+        fontName: s.fontName,
+        fontSize: s.fontSize,
+        letterSpacing: s.letterSpacing,
+        lineHeight: s.lineHeight
+      })) : [],
+      paintStyles: ${includeStyles} ? paintStyles.map(s => ({
+        name: s.name,
+        id: s.id,
+        paints: s.paints,
+        description: s.description
+      })) : [],
+      effectStyles: ${includeStyles} ? effectStyles.map(s => ({
+        name: s.name,
+        id: s.id,
+        effects: s.effects,
+        description: s.description
+      })) : []
+    };
+  `);
+
+  // Cache the result
+  setCachedDesignSystem(result.result);
+
+  return result.result;
+}
+
+/**
+ * Tool 2: get_screenshot
+ * Layer 1: Visual (PNG screenshot)
+ */
+async function getScreenshot(api, args, sendProgress) {
+  const { nodeId, scale = 2, format = 'PNG' } = args;
+
+  sendProgress({ status: `Capturing screenshot of node ${nodeId}...` });
+
+  // Use existing screenshot helper from lib
+  const screenshot = api.createScreenshotHelper(api);
+  const result = await screenshot.screenshotById(nodeId, {
+    scale,
+    format
+  });
+
+  return result;
+}
+
+/**
+ * Tool 3: get_component_structure
+ * Layer 2: Structural (component map with node IDs)
+ */
+async function getComponentStructure(api, args, sendProgress) {
+  const { nodeId, depth = -1, includeText = true } = args;
+
+  sendProgress({ status: `Mapping structure for node ${nodeId}...` });
+
+  // Execute component map script (from 02-structural-layer.js)
+  const result = await api.executeInFigma(`
+    const nodeId = "${nodeId}";
+    const root = figma.getNodeById(nodeId);
+
+    if (!root) {
+      throw new Error("Node not found: " + nodeId);
+    }
+
+    function mapNode(node, currentDepth = 0) {
+      const info = {
+        name: node.name,
+        type: node.type,
+        id: node.id
+      };
+
+      if (node.type === "INSTANCE" && node.mainComponent) {
+        info.component = node.mainComponent.name;
+        info.componentId = node.mainComponent.id;
+      }
+
+      if (${includeText} && node.type === "TEXT") {
+        info.text = (node.characters || "").substring(0, 60);
+      }
+
+      const maxDepth = ${depth};
+      if (node.children && (maxDepth === -1 || currentDepth < maxDepth)) {
+        info.children = node.children.map(c => mapNode(c, currentDepth + 1));
+      }
+
+      return info;
+    }
+
+    return mapNode(root);
+  `);
+
+  return result.result;
+}
+
+/**
+ * Tool 4: get_node_details
+ * Layer 3: Detailed (properties, bindings, dimensions)
+ */
+async function getNodeDetails(api, args, sendProgress) {
+  const { nodeId, resolveBindings = false } = args;
+
+  sendProgress({ status: `Extracting details for node ${nodeId}...` });
+
+  // Execute node details script (from 03-detailed-layer.js)
+  const result = await api.executeInFigma(`
+    const nodeId = "${nodeId}";
+    const node = figma.getNodeById(nodeId);
+
+    if (!node) {
+      throw new Error("Node not found: " + nodeId);
+    }
+
+    const allVars = await figma.variables.getLocalVariablesAsync();
+
+    // Helper to resolve variable binding
+    function resolveVar(varId) {
+      const variable = allVars.find(v => v.id === varId);
+      return variable ? variable.name : varId;
+    }
+
+    // Extract basic properties
+    const details = {
+      identity: {
+        name: node.name,
+        id: node.id,
+        type: node.type
+      },
+      dimensions: {
+        width: node.width,
+        height: node.height
+      }
+    };
+
+    // Extract layout if frame/component
+    if (node.layoutMode) {
+      details.layout = {
+        mode: node.layoutMode,
+        primaryAxisSizingMode: node.primaryAxisSizingMode,
+        counterAxisSizingMode: node.counterAxisSizingMode,
+        itemSpacing: node.itemSpacing,
+        padding: {
+          left: node.paddingLeft,
+          right: node.paddingRight,
+          top: node.paddingTop,
+          bottom: node.paddingBottom
+        }
+      };
+    }
+
+    // Extract appearance
+    details.appearance = {
+      fills: node.fills ? node.fills.map((fill, i) => {
+        const fillData = {
+          type: fill.type,
+          visible: fill.visible,
+          opacity: fill.opacity
+        };
+
+        if (fill.type === 'SOLID' && fill.color) {
+          fillData.color = {
+            r: Math.round(fill.color.r * 255),
+            g: Math.round(fill.color.g * 255),
+            b: Math.round(fill.color.b * 255),
+            a: fill.color.a !== undefined ? fill.color.a : 1
+          };
+        }
+
+        // Check for variable binding
+        if (node.boundVariables && node.boundVariables.fills) {
+          const binding = node.boundVariables.fills[i];
+          if (binding && binding.id) {
+            fillData.boundTo = resolveVar(binding.id);
+          }
+        }
+
+        return fillData;
+      }) : [],
+      strokes: node.strokes ? node.strokes.map((stroke, i) => {
+        const strokeData = {
+          type: stroke.type,
+          visible: stroke.visible
+        };
+
+        if (stroke.type === 'SOLID' && stroke.color) {
+          strokeData.color = {
+            r: Math.round(stroke.color.r * 255),
+            g: Math.round(stroke.color.g * 255),
+            b: Math.round(stroke.color.b * 255),
+            a: stroke.color.a !== undefined ? stroke.color.a : 1
+          };
+        }
+
+        // Check for variable binding on stroke paint
+        if (stroke.boundVariables && stroke.boundVariables.color) {
+          const binding = stroke.boundVariables.color;
+          if (binding && binding.id) {
+            strokeData.boundTo = resolveVar(binding.id);
+          }
+        }
+
+        return strokeData;
+      }) : [],
+      strokeWeight: node.strokeWeight,
+      cornerRadius: node.cornerRadius,
+      opacity: node.opacity
+    };
+
+    // Extract bindings
+    details.bindings = {};
+    if (node.boundVariables) {
+      Object.keys(node.boundVariables).forEach(key => {
+        if (node.boundVariables[key] && node.boundVariables[key].id) {
+          details.bindings[key] = resolveVar(node.boundVariables[key].id);
+        }
+      });
+    }
+
+    // Extract children info
+    if (node.children) {
+      details.structure = {
+        childCount: node.children.length,
+        children: node.children.map(child => ({
+          id: child.id,
+          name: child.name,
+          type: child.type
+        }))
+      };
+    }
+
+    return details;
+  `);
+
+  return result.result;
+}
+
+/**
+ * Tool 5: analyze_complete
+ * Layer 4: Complete workflow (all layers combined)
+ */
+async function analyzeComplete(api, args, sendProgress) {
+  const { nodeId, layers = [0, 1, 2, 3], screenshotScale = 2 } = args;
+
+  const results = {};
+
+  // Layer 0: Design System
+  if (layers.includes(0)) {
+    sendProgress({ status: 'Layer 0: Fetching design system...' });
+    results.designSystem = await getDesignSystem(api, {}, sendProgress);
+  }
+
+  // Layer 1: Screenshot
+  if (layers.includes(1)) {
+    sendProgress({ status: 'Layer 1: Capturing screenshot...' });
+    results.screenshot = await getScreenshot(api, { nodeId, scale: screenshotScale }, sendProgress);
+  }
+
+  // Layer 2: Structure
+  if (layers.includes(2)) {
+    sendProgress({ status: 'Layer 2: Mapping structure...' });
+    results.structure = await getComponentStructure(api, { nodeId, depth: 2 }, sendProgress);
+  }
+
+  // Layer 3: Details
+  if (layers.includes(3)) {
+    sendProgress({ status: 'Layer 3: Extracting details...' });
+    results.details = await getNodeDetails(api, { nodeId }, sendProgress);
+  }
+
+  sendProgress({ status: 'Complete! All layers fetched.' });
+
+  return results;
+}
+
+/**
+ * Tool 6: get_components
+ * Get list of all local components
+ */
+async function getComponents(api, args, sendProgress) {
+  const { limit = 50, searchTerm = '' } = args;
+
+  sendProgress({ status: 'Fetching component list from Figma...' });
+
+  const result = await api.executeInFigma(`
+    const components = figma.root.findAll(node => node.type === 'COMPONENT');
+
+    let filtered = components;
+
+    // Filter by search term if provided
+    if ("${searchTerm}") {
+      const search = "${searchTerm}".toLowerCase();
+      filtered = components.filter(c => c.name.toLowerCase().includes(search));
+    }
+
+    // Limit results
+    const limited = filtered.slice(0, ${limit});
+
+    return limited.map(comp => ({
+      id: comp.id,
+      name: comp.name,
+      description: comp.description || '',
+      width: comp.width,
+      height: comp.height
+    }));
+  `);
+
+  sendProgress({ status: `Found ${result.result.length} components` });
+
+  return result.result;
+}
+
+module.exports = {
+  get_design_system: getDesignSystem,
+  get_screenshot: getScreenshot,
+  get_component_structure: getComponentStructure,
+  get_node_details: getNodeDetails,
+  analyze_complete: analyzeComplete,
+  get_components: getComponents
+};
