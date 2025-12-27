@@ -77,7 +77,7 @@ async function getDesignSystem(api, args, sendProgress) {
       collections: ${includeVariables} ? varsByCollection : {},
       textStyles: ${includeStyles} ? textStyles.map(s => ({
         name: s.name,
-        id: s.id,
+        id: s.id.replace(/,$/,''),
         fontName: s.fontName,
         fontSize: s.fontSize,
         letterSpacing: s.letterSpacing,
@@ -85,13 +85,13 @@ async function getDesignSystem(api, args, sendProgress) {
       })) : [],
       paintStyles: ${includeStyles} ? paintStyles.map(s => ({
         name: s.name,
-        id: s.id,
+        id: s.id.replace(/,$/,''),
         paints: s.paints,
         description: s.description
       })) : [],
       effectStyles: ${includeStyles} ? effectStyles.map(s => ({
         name: s.name,
-        id: s.id,
+        id: s.id.replace(/,$/,''),
         effects: s.effects,
         description: s.description
       })) : []
@@ -387,11 +387,77 @@ async function getComponents(api, args, sendProgress) {
   return result.result;
 }
 
+/**
+ * Tool 7: get_component_variants
+ * Get all variants from a ComponentSet
+ */
+async function getComponentVariants(api, args, sendProgress) {
+  const { componentSetId } = args;
+
+  sendProgress({ status: `Fetching variants from ComponentSet ${componentSetId}...` });
+
+  const result = await api.executeInFigma(`
+    const componentSetId = "${componentSetId}";
+    const componentSet = figma.getNodeById(componentSetId);
+
+    if (!componentSet) {
+      throw new Error("ComponentSet not found: " + componentSetId);
+    }
+
+    if (componentSet.type !== "COMPONENT_SET") {
+      throw new Error("Node is not a ComponentSet. Found type: " + componentSet.type);
+    }
+
+    // Extract variants
+    const variants = componentSet.children.map(variant => {
+      // Parse variant properties from name (e.g., "State=On" -> {State: "On"})
+      const properties = {};
+      if (variant.name.includes('=')) {
+        const pairs = variant.name.split(',').map(p => p.trim());
+        pairs.forEach(pair => {
+          const [key, value] = pair.split('=').map(s => s.trim());
+          if (key && value) {
+            properties[key] = value;
+          }
+        });
+      }
+
+      return {
+        id: variant.id,
+        name: variant.name,
+        type: variant.type,
+        properties: properties,
+        position: {
+          x: variant.x,
+          y: variant.y
+        },
+        dimensions: {
+          width: variant.width,
+          height: variant.height
+        },
+        childCount: variant.children ? variant.children.length : 0
+      };
+    });
+
+    return {
+      componentSetId: componentSet.id,
+      componentSetName: componentSet.name,
+      totalVariants: variants.length,
+      variants: variants
+    };
+  `);
+
+  sendProgress({ status: `Found ${result.result.totalVariants} variants` });
+
+  return result.result;
+}
+
 module.exports = {
   get_design_system: getDesignSystem,
   get_screenshot: getScreenshot,
   get_component_structure: getComponentStructure,
   get_node_details: getNodeDetails,
   analyze_complete: analyzeComplete,
-  get_components: getComponents
+  get_components: getComponents,
+  get_component_variants: getComponentVariants
 };

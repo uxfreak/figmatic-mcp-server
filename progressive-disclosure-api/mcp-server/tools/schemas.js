@@ -354,6 +354,21 @@ const getComponents = {
   }
 };
 
+const getComponentVariants = {
+  name: 'get_component_variants',
+  description: 'Get all variants from a ComponentSet with their properties, IDs, and metadata. Use this to discover what variants exist before modifying or cloning them.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      componentSetId: {
+        type: 'string',
+        description: 'ComponentSet node ID (e.g., "231:20305")'
+      }
+    },
+    required: ['componentSetId']
+  }
+};
+
 const modifyNode = {
   name: 'modify_node',
   description: 'Modify properties of an existing node including layout, appearance, and dimensions.',
@@ -458,6 +473,63 @@ const addComponentProperty = {
       }
     },
     required: ['componentId', 'propertyName', 'propertyType', 'defaultValue']
+  }
+};
+
+const editComponentProperty = {
+  name: 'edit_component_property',
+  description: 'Edit an existing component property definition (name, default value, or preferred values). Supports BOOLEAN, TEXT, INSTANCE_SWAP, and VARIANT property types. Returns the updated property key (which may change if the name changed).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      componentId: {
+        type: 'string',
+        description: 'Component or ComponentSet node ID'
+      },
+      propertyName: {
+        type: 'string',
+        description: 'Current property name to edit (e.g., "Title", "ShowCode")'
+      },
+      newDefinition: {
+        type: 'object',
+        description: 'New property definition. Can update defaultValue, preferredValues (for TEXT), variantOptions (for VARIANT), or rename by providing new property name as key.',
+        properties: {
+          defaultValue: {
+            description: 'New default value (string for TEXT, boolean for BOOLEAN, node ID for INSTANCE_SWAP)'
+          },
+          preferredValues: {
+            type: 'array',
+            items: { type: 'object' },
+            description: 'Preferred values for TEXT properties (array of {type: "TEXT", value: "..."})'
+          },
+          variantOptions: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Variant options for VARIANT properties'
+          }
+        }
+      }
+    },
+    required: ['componentId', 'propertyName', 'newDefinition']
+  }
+};
+
+const deleteComponentProperty = {
+  name: 'delete_component_property',
+  description: 'Delete a component property definition from a component or component set. Returns information about the deleted property and remaining property count.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      componentId: {
+        type: 'string',
+        description: 'Component or ComponentSet node ID'
+      },
+      propertyName: {
+        type: 'string',
+        description: 'Property name to delete (e.g., "Title", "ShowCode")'
+      }
+    },
+    required: ['componentId', 'propertyName']
   }
 };
 
@@ -737,6 +809,171 @@ const deleteTextStyle = {
   }
 };
 
+const deleteNode = {
+  name: 'delete_node',
+  description: 'Delete a node from the Figma canvas. Cannot delete children of instance nodes.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'Node ID to delete (e.g., "221:18055")'
+      }
+    },
+    required: ['nodeId']
+  }
+};
+
+const cloneNode = {
+  name: 'clone_node',
+  description: 'Clone any Figma node (component, frame, group, text, rectangle, etc.) with optional positioning and renaming. Works with all SceneNode types. Preserves all properties, children, styling, and variable bindings of the original. Useful for creating component variants, duplicating screens, or reusing element groups.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'Node ID to clone - works with any node type (e.g., "231:20301")'
+      },
+      newName: {
+        type: 'string',
+        description: 'Optional new name for the cloned node'
+      },
+      offsetX: {
+        type: 'number',
+        default: 100,
+        description: 'Horizontal offset from original position in pixels'
+      },
+      offsetY: {
+        type: 'number',
+        default: 0,
+        description: 'Vertical offset from original position in pixels'
+      }
+    },
+    required: ['nodeId']
+  }
+};
+
+const reorderChildren = {
+  name: 'reorder_children',
+  description: 'Reorder children within a parent node. Supports two modes: (1) Full reorder - provide complete childOrder array with all child IDs in desired order, or (2) Single move - provide nodeId of one child and newIndex to move it to. Works with any node type that has children: ComponentSets (variants), auto-layout frames, groups, etc. Children array ordering represents z-index (index 0 = bottom/back, last index = top/front).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      parentId: {
+        type: 'string',
+        description: 'Parent node ID whose children to reorder (e.g., "231:20305" for ComponentSet)'
+      },
+      childOrder: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Full reorder mode: Array of all child node IDs in desired order (e.g., ["231:20303", "231:20301"] to reverse 2 variants)'
+      },
+      nodeId: {
+        type: 'string',
+        description: 'Single move mode: ID of child node to move to new position'
+      },
+      newIndex: {
+        type: 'number',
+        description: 'Single move mode: Target index (0 = bottom/back, higher = towards top/front)'
+      }
+    },
+    required: ['parentId']
+  }
+};
+
+const addVariantToComponentSet = {
+  name: 'add_variant_to_component_set',
+  description: 'Add a new variant to an existing ComponentSet by cloning an existing variant and optionally modifying it. Automatically appends the clone to the ComponentSet.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      componentSetId: {
+        type: 'string',
+        description: 'ComponentSet node ID to add variant to (e.g., "221:18176")'
+      },
+      sourceVariantId: {
+        type: 'string',
+        description: 'Existing variant node ID to clone from (e.g., "221:18053")'
+      },
+      variantName: {
+        type: 'string',
+        description: 'Name for the new variant following PropertyName=Value pattern (e.g., "State=Filled")'
+      },
+      position: {
+        type: 'object',
+        description: 'Optional position offset from source variant',
+        properties: {
+          x: {
+            type: 'number',
+            description: 'X offset in pixels (default: 400)'
+          },
+          y: {
+            type: 'number',
+            description: 'Y offset in pixels (default: 0)'
+          }
+        }
+      },
+      modifications: {
+        type: 'object',
+        description: 'Optional modifications to apply after cloning',
+        properties: {
+          textNodes: {
+            type: 'array',
+            description: 'Text node modifications',
+            items: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Path to text node (e.g., ["Placeholder"] or ["Container", "Text"])'
+                },
+                characters: {
+                  type: 'string',
+                  description: 'New text content'
+                },
+                fontName: {
+                  type: 'object',
+                  description: 'Font to apply',
+                  properties: {
+                    family: { type: 'string' },
+                    style: { type: 'string' }
+                  }
+                }
+              },
+              required: ['path']
+            }
+          },
+          nodes: {
+            type: 'array',
+            description: 'General node modifications',
+            items: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Path to target node'
+                },
+                opacity: {
+                  type: 'number',
+                  description: 'Set opacity (0.0 to 1.0)'
+                },
+                visible: {
+                  type: 'boolean',
+                  description: 'Set visibility'
+                }
+              },
+              required: ['path']
+            }
+          }
+        }
+      }
+    },
+    required: ['componentSetId', 'sourceVariantId', 'variantName']
+  }
+};
+
 const createTextStyle = {
   name: 'create_text_style',
   description: 'Create a new text style with specified typography properties.',
@@ -796,6 +1033,180 @@ const createTextStyle = {
   }
 };
 
+const bindPropertyReference = {
+  name: 'bind_property_reference',
+  description: 'Bind a node property (visible, opacity, etc.) to a component property. Used to make properties controllable from component instances.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'Node ID whose property should be bound'
+      },
+      nodeProperty: {
+        type: 'string',
+        enum: ['visible', 'opacity', 'mainComponent'],
+        description: 'Node property to bind (visible for BOOLEAN properties, opacity for NUMBER properties, mainComponent for INSTANCE_SWAP)'
+      },
+      componentPropertyKey: {
+        type: 'string',
+        description: 'Component property key with ID suffix (e.g., "ShowCode#228:93" from add_component_property)'
+      }
+    },
+    required: ['nodeId', 'nodeProperty', 'componentPropertyKey']
+  }
+};
+
+const importImageFromUrl = {
+  name: 'import_image_from_url',
+  description: 'Import an image from a URL into Figma. Returns image hash and dimensions. Works with PNG, JPEG, GIF (max 4096px). Use for icons, flags, avatars, photos, etc.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url: {
+        type: 'string',
+        description: 'Image URL (must be PNG, JPEG, or GIF)'
+      },
+      name: {
+        type: 'string',
+        description: 'Name/identifier for this image (for reference)'
+      }
+    },
+    required: ['url', 'name']
+  }
+};
+
+const createImageComponent = {
+  name: 'create_image_component',
+  description: 'Complete workflow: import image from URL, create rectangle with image fill, convert to component. One-step solution for creating image-based components.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url: {
+        type: 'string',
+        description: 'Image URL (PNG, JPEG, or GIF)'
+      },
+      componentName: {
+        type: 'string',
+        description: 'Component name (e.g., "Flag/Indonesia", "Icon/Search")'
+      },
+      width: {
+        type: 'number',
+        description: 'Component width in pixels. If not specified, uses image width from getSizeAsync()'
+      },
+      height: {
+        type: 'number',
+        description: 'Component height in pixels. If not specified, uses image height from getSizeAsync()'
+      },
+      maxWidth: {
+        type: 'number',
+        description: 'Maximum width - if image is larger, scales down proportionally'
+      },
+      maxHeight: {
+        type: 'number',
+        description: 'Maximum height - if image is larger, scales down proportionally'
+      },
+      scaleMode: {
+        type: 'string',
+        enum: ['FILL', 'FIT', 'CROP', 'TILE'],
+        description: 'How image should scale within rectangle',
+        default: 'FILL'
+      },
+      cornerRadius: {
+        type: 'number',
+        description: 'Corner radius in pixels (optional)',
+        default: 0
+      }
+    },
+    required: ['url', 'componentName']
+  }
+};
+
+const batchCreateImageComponents = {
+  name: 'batch_create_image_components',
+  description: 'Batch create multiple image components from URLs. Optionally combine into ComponentSet with variants. Efficient for creating icon sets, flag sets, avatar sets, etc.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      images: {
+        type: 'array',
+        description: 'Array of image specifications',
+        items: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'Image URL'
+            },
+            name: {
+              type: 'string',
+              description: 'Component name (used for variant value if creating ComponentSet)'
+            },
+            width: {
+              type: 'number',
+              description: 'Width in pixels. If not specified, uses image width'
+            },
+            height: {
+              type: 'number',
+              description: 'Height in pixels. If not specified, uses image height'
+            },
+            maxWidth: {
+              type: 'number',
+              description: 'Maximum width - scales down proportionally if exceeded'
+            },
+            maxHeight: {
+              type: 'number',
+              description: 'Maximum height - scales down proportionally if exceeded'
+            }
+          },
+          required: ['url', 'name']
+        }
+      },
+      createComponentSet: {
+        type: 'boolean',
+        description: 'Whether to combine all components into a ComponentSet (default: false)',
+        default: false
+      },
+      variantProperty: {
+        type: 'string',
+        description: 'Variant property name if creating ComponentSet (e.g., "Country", "Icon", "Type")',
+        default: 'Type'
+      },
+      scaleMode: {
+        type: 'string',
+        enum: ['FILL', 'FIT', 'CROP', 'TILE'],
+        description: 'Image scale mode for all components (default: FILL)',
+        default: 'FILL'
+      },
+      cornerRadius: {
+        type: 'number',
+        description: 'Corner radius for all components (default: 0)',
+        default: 0
+      }
+    },
+    required: ['images']
+  }
+};
+
+const executeFigmaScript = {
+  name: 'execute_figma_script',
+  description: 'Execute arbitrary Figma Plugin API code. Use this for custom operations, complex workflows, or when existing tools don\'t cover your needs. The script runs in the Figma plugin context with full API access.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      script: {
+        type: 'string',
+        description: 'JavaScript code to execute in Figma. Has access to full Figma Plugin API (figma.*). Can use async/await. Must return a value (will be serialized to JSON).'
+      },
+      description: {
+        type: 'string',
+        description: 'Optional description of what the script does (for logging/debugging)'
+      }
+    },
+    required: ['script']
+  }
+};
+
 // Export all schemas
 
 function getAllSchemas() {
@@ -807,6 +1218,7 @@ function getAllSchemas() {
     getNodeDetails,
     analyzeComplete,
     getComponents,
+    getComponentVariants,
     getComponentProperties,
     getInstanceProperties,
     // WRITE tools
@@ -821,13 +1233,26 @@ function getAllSchemas() {
     renameNode,
     // COMPONENT PROPERTY tools
     addComponentProperty,
+    editComponentProperty,
+    deleteComponentProperty,
     bindTextToProperty,
+    bindPropertyReference,
     setTextTruncation,
     setInstanceProperties,
     createComponentVariants,
+    addVariantToComponentSet,
     createVariable,
     createTextStyle,
-    deleteTextStyle
+    deleteTextStyle,
+    deleteNode,
+    cloneNode,
+    reorderChildren,
+    // IMAGE tools
+    importImageFromUrl,
+    createImageComponent,
+    batchCreateImageComponents,
+    // UTILITY tools
+    executeFigmaScript
   ];
 }
 
@@ -840,6 +1265,7 @@ module.exports = {
   getNodeDetails,
   analyzeComplete,
   getComponents,
+  getComponentVariants,
   getComponentProperties,
   getInstanceProperties,
   createComponent,
@@ -852,11 +1278,21 @@ module.exports = {
   swapComponent,
   renameNode,
   addComponentProperty,
+  editComponentProperty,
+  deleteComponentProperty,
   bindTextToProperty,
+  bindPropertyReference,
   setTextTruncation,
   setInstanceProperties,
   createComponentVariants,
+  addVariantToComponentSet,
   createVariable,
   createTextStyle,
-  deleteTextStyle
+  deleteTextStyle,
+  deleteNode,
+  cloneNode,
+  reorderChildren,
+  importImageFromUrl,
+  createImageComponent,
+  batchCreateImageComponents
 };

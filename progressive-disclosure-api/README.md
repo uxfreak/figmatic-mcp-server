@@ -54,6 +54,20 @@ Example:
 - Layer 3 shows: Node `146:4867` has fill bound to `Fills/card-background`
 - You need BOTH layers to understand: "This card is white in light mode, dark gray in dark mode"
 
+## Documentation
+
+📖 **[MCP Server Tool Design Philosophy](./mcp-server/TOOL-DESIGN-PHILOSOPHY.md)** - Essential reading for understanding tool design decisions
+
+**Architecture Docs:**
+- [MCP vs REST Analysis](./MCP-VS-REST-ANALYSIS.md) - Why MCP is AI-native
+- [SSE Architecture](./SSE-ARCHITECTURE.md) - Streaming implementation details
+- [Decisions Log](./DECISIONS.md) - Historical design decisions
+
+**Case Studies:**
+- See [case-studies/](../case-studies/) for real-world implementation examples
+
+---
+
 ## Quick Start
 
 ```javascript

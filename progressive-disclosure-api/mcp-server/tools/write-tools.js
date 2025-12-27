@@ -250,13 +250,15 @@ async function bindVariable(api, args, sendProgress) {
 
     if (property === 'fills') {
       // For fills, use setBoundVariableForPaint on first fill
-      const fills = node.fills && node.fills.length > 0 ? node.fills : [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+      const fills = node.fills && node.fills.length > 0 ? node.fills : [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 }, visible: true }];
       const boundPaint = figma.variables.setBoundVariableForPaint(fills[0], 'color', variable);
+      boundPaint.visible = true;  // Explicitly ensure visibility
       node.fills = [boundPaint];
     } else if (property === 'strokes') {
       // For strokes, use setBoundVariableForPaint on first stroke
-      const strokes = node.strokes && node.strokes.length > 0 ? node.strokes : [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }];
+      const strokes = node.strokes && node.strokes.length > 0 ? node.strokes : [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 }, visible: true }];
       const boundPaint = figma.variables.setBoundVariableForPaint(strokes[0], 'color', variable);
+      boundPaint.visible = true;  // Explicitly ensure visibility
       node.strokes = [boundPaint];
     } else {
       // For other properties (width, height, padding, etc.)
@@ -555,8 +557,8 @@ async function addComponentProperty(api, args, sendProgress) {
       throw new Error("Component not found: ${componentId}");
     }
 
-    if (component.type !== "COMPONENT") {
-      throw new Error("Node is not a component: " + component.type);
+    if (component.type !== "COMPONENT" && component.type !== "COMPONENT_SET") {
+      throw new Error("Node is not a component or component set: " + component.type);
     }
 
     // Add the component property
@@ -577,6 +579,136 @@ async function addComponentProperty(api, args, sendProgress) {
   `);
 
   sendProgress({ status: `Property added successfully: ${result.result.propertyKey}` });
+
+  return result.result;
+}
+
+/**
+ * Tool: edit_component_property
+ * Edit an existing component property definition (name, default value, or preferred values)
+ * Supports BOOLEAN, TEXT, INSTANCE_SWAP, and VARIANT property types
+ */
+async function editComponentProperty(api, args, sendProgress) {
+  const { componentId, propertyName, newDefinition } = args;
+
+  if (!componentId || !propertyName || !newDefinition) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: componentId, propertyName, newDefinition'
+    };
+  }
+
+  sendProgress({ status: `Editing property "${propertyName}" on component ${componentId}...` });
+
+  const result = await api.executeInFigma(`
+    const component = figma.getNodeById("${componentId}");
+    if (!component) {
+      throw new Error("Component not found: ${componentId}");
+    }
+
+    if (component.type !== "COMPONENT" && component.type !== "COMPONENT_SET") {
+      throw new Error("Node is not a component or component set: " + component.type);
+    }
+
+    // Find the full property key (includes unique ID suffix)
+    const propDefs = component.componentPropertyDefinitions || {};
+    const propertyKey = Object.keys(propDefs).find(key =>
+      key === "${propertyName}" || key.startsWith("${propertyName}#")
+    );
+
+    if (!propertyKey) {
+      throw new Error("Property '${propertyName}' not found on component");
+    }
+
+    // Edit the property
+    const newPropertyKey = component.editComponentProperty(
+      propertyKey,
+      ${JSON.stringify(newDefinition)}
+    );
+
+    // Get updated property definition
+    const updatedDef = component.componentPropertyDefinitions[newPropertyKey];
+
+    return {
+      success: true,
+      componentId: component.id,
+      componentName: component.name,
+      componentType: component.type,
+      oldPropertyName: "${propertyName}",
+      newPropertyKey: newPropertyKey,
+      updatedDefinition: {
+        type: updatedDef.type,
+        defaultValue: updatedDef.defaultValue,
+        preferredValues: updatedDef.preferredValues,
+        variantOptions: updatedDef.variantOptions
+      }
+    };
+  `);
+
+  sendProgress({ status: `Property edited successfully: ${result.result.newPropertyKey}` });
+
+  return result.result;
+}
+
+/**
+ * Tool: delete_component_property
+ * Delete a component property definition from a component or component set
+ */
+async function deleteComponentProperty(api, args, sendProgress) {
+  const { componentId, propertyName } = args;
+
+  if (!componentId || !propertyName) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: componentId, propertyName'
+    };
+  }
+
+  sendProgress({ status: `Deleting property "${propertyName}" from component ${componentId}...` });
+
+  const result = await api.executeInFigma(`
+    const component = figma.getNodeById("${componentId}");
+    if (!component) {
+      throw new Error("Component not found: ${componentId}");
+    }
+
+    if (component.type !== "COMPONENT" && component.type !== "COMPONENT_SET") {
+      throw new Error("Node is not a component or component set: " + component.type);
+    }
+
+    // Store property info before deletion
+    const propDefs = component.componentPropertyDefinitions || {};
+    const propertyKey = Object.keys(propDefs).find(key =>
+      key === "${propertyName}" || key.startsWith("${propertyName}#")
+    );
+
+    if (!propertyKey) {
+      throw new Error("Property '${propertyName}' not found on component");
+    }
+
+    const deletedPropDef = propDefs[propertyKey];
+
+    // Delete the property
+    component.deleteComponentProperty(propertyKey);
+
+    return {
+      success: true,
+      deleted: true,
+      componentId: component.id,
+      componentName: component.name,
+      componentType: component.type,
+      deletedPropertyKey: propertyKey,
+      deletedPropertyDefinition: {
+        type: deletedPropDef.type,
+        defaultValue: deletedPropDef.defaultValue,
+        preferredValues: deletedPropDef.preferredValues,
+        variantOptions: deletedPropDef.variantOptions
+      },
+      remainingProperties: Object.keys(component.componentPropertyDefinitions || {}).length
+    };
+  `);
+
+  sendProgress({ status: `Property deleted successfully: ${result.result.deletedPropertyKey}` });
 
   return result.result;
 }
@@ -1140,6 +1272,173 @@ async function deleteTextStyle(api, args, sendProgress) {
 }
 
 /**
+ * Delete a node from the Figma canvas
+ * @param {Object} api - API instance
+ * @param {Object} args - Arguments
+ * @param {string} args.nodeId - Node ID to delete
+ * @param {Function} sendProgress - Progress callback
+ */
+async function deleteNode(api, args, sendProgress) {
+  const { nodeId } = args;
+
+  if (!nodeId) {
+    throw new Error('nodeId is required');
+  }
+
+  sendProgress({ status: `Deleting node ${nodeId}...` });
+
+  const result = await api.executeInFigma(`
+    const node = figma.getNodeById("${nodeId}");
+
+    if (!node) {
+      throw new Error(\`Node with ID "${nodeId}" not found\`);
+    }
+
+    // Store node info before deletion
+    const nodeInfo = {
+      id: node.id,
+      name: node.name,
+      type: node.type
+    };
+
+    // Attempt to remove the node
+    try {
+      node.remove();
+    } catch (error) {
+      throw new Error(\`Failed to delete node: \${error.message}. Note: Cannot delete children of instance nodes.\`);
+    }
+
+    return {
+      deleted: true,
+      nodeInfo
+    };
+  `);
+
+  const { nodeInfo } = result.result;
+
+  sendProgress({ status: `Successfully deleted ${nodeInfo.type} node "${nodeInfo.name}" (ID: ${nodeInfo.id})` });
+
+  return result.result;
+}
+
+/**
+ * Tool: add_variant_to_component_set
+ * Add a new variant to an existing ComponentSet by cloning and modifying
+ */
+async function addVariantToComponentSet(api, args, sendProgress) {
+  const { componentSetId, sourceVariantId, variantName, position = {}, modifications = {} } = args;
+
+  if (!componentSetId || !sourceVariantId || !variantName) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: componentSetId, sourceVariantId, and variantName'
+    };
+  }
+
+  sendProgress({ status: `Adding variant "${variantName}" to ComponentSet ${componentSetId}...` });
+
+  const result = await api.executeInFigma(`
+    const componentSet = figma.getNodeById("${componentSetId}");
+    if (!componentSet || componentSet.type !== "COMPONENT_SET") {
+      throw new Error("ComponentSet not found or invalid type");
+    }
+
+    const sourceVariant = figma.getNodeById("${sourceVariantId}");
+    if (!sourceVariant || sourceVariant.type !== "COMPONENT") {
+      throw new Error("Source variant not found or is not a component");
+    }
+
+    // Clone the source variant
+    const newVariant = sourceVariant.clone();
+    newVariant.name = "${variantName}";
+
+    // Position the clone
+    const posX = ${position.x !== undefined ? position.x : 400};
+    const posY = ${position.y !== undefined ? position.y : 0};
+    newVariant.x = sourceVariant.x + posX;
+    newVariant.y = sourceVariant.y + posY;
+
+    // Apply modifications if provided
+    const modifications = ${JSON.stringify(modifications)};
+
+    // Load fonts for text modifications
+    if (modifications.textNodes) {
+      for (const textMod of modifications.textNodes) {
+        if (textMod.fontName) {
+          await figma.loadFontAsync(textMod.fontName);
+        }
+      }
+    }
+
+    // Apply text node modifications
+    if (modifications.textNodes) {
+      for (const textMod of modifications.textNodes) {
+        let targetNode = newVariant;
+
+        // Navigate to target node using path
+        for (const pathSegment of textMod.path) {
+          targetNode = targetNode.findOne(child => child.name === pathSegment);
+          if (!targetNode) break;
+        }
+
+        if (targetNode && targetNode.type === "TEXT") {
+          // Load current font if not already loaded
+          await figma.loadFontAsync(targetNode.fontName);
+
+          // Change characters
+          if (textMod.characters !== undefined) {
+            targetNode.characters = textMod.characters;
+          }
+
+          // Change font
+          if (textMod.fontName) {
+            targetNode.fontName = textMod.fontName;
+          }
+        }
+      }
+    }
+
+    // Apply general node modifications
+    if (modifications.nodes) {
+      for (const nodeMod of modifications.nodes) {
+        let targetNode = newVariant;
+
+        // Navigate to target node using path
+        for (const pathSegment of nodeMod.path) {
+          targetNode = targetNode.findOne(child => child.name === pathSegment);
+          if (!targetNode) break;
+        }
+
+        if (targetNode) {
+          if (nodeMod.opacity !== undefined) {
+            targetNode.opacity = nodeMod.opacity;
+          }
+          if (nodeMod.visible !== undefined) {
+            targetNode.visible = nodeMod.visible;
+          }
+        }
+      }
+    }
+
+    // Add to ComponentSet
+    componentSet.appendChild(newVariant);
+
+    return {
+      success: true,
+      componentSetId: componentSet.id,
+      componentSetName: componentSet.name,
+      newVariantId: newVariant.id,
+      newVariantName: newVariant.name,
+      totalVariants: componentSet.children.length
+    };
+  `);
+
+  sendProgress({ status: `Successfully added variant "${variantName}" (total: ${result.result.totalVariants} variants)` });
+
+  return result.result;
+}
+
+/**
  * Create a text style
  * @param {Object} api - API instance
  * @param {Object} args - Arguments
@@ -1194,6 +1493,551 @@ async function createTextStyle(api, args, sendProgress) {
   return result.result;
 }
 
+/**
+ * Tool: bind_property_reference
+ * Bind a node property to a component property
+ */
+async function bindPropertyReference(api, args, sendProgress) {
+  const { nodeId, nodeProperty, componentPropertyKey } = args;
+
+  if (!nodeId || !nodeProperty || !componentPropertyKey) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: nodeId, nodeProperty, and componentPropertyKey'
+    };
+  }
+
+  sendProgress({ status: `Binding ${nodeProperty} of node ${nodeId} to property ${componentPropertyKey}...` });
+
+  const result = await api.executeInFigma(`
+    const node = figma.getNodeById("${nodeId}");
+    if (!node) {
+      throw new Error("Node not found: ${nodeId}");
+    }
+
+    // Get existing references or create new object
+    const existingRefs = node.componentPropertyReferences || {};
+
+    // Set component property reference by replacing the entire object
+    node.componentPropertyReferences = {
+      ...existingRefs,
+      "${nodeProperty}": "${componentPropertyKey}"
+    };
+
+    return {
+      success: true,
+      nodeId: node.id,
+      nodeName: node.name,
+      nodeProperty: "${nodeProperty}",
+      componentPropertyKey: "${componentPropertyKey}",
+      allReferences: node.componentPropertyReferences
+    };
+  `);
+
+  sendProgress({ status: `Successfully bound ${nodeProperty} to ${componentPropertyKey}` });
+
+  return result.result;
+}
+
+/**
+ * Tool: import_image_from_url
+ * Import an image from a URL into Figma
+ */
+async function importImageFromUrl(api, args, sendProgress) {
+  const { url, name } = args;
+
+  if (!url || !name) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: url and name'
+    };
+  }
+
+  sendProgress({ status: `Importing image "${name}" from ${url}...` });
+
+  const result = await api.executeInFigma(`
+    const imageUrl = "${url}";
+    const imageName = "${name}";
+
+    try {
+      // Import image from URL
+      const image = await figma.createImageAsync(imageUrl);
+
+      // Get image dimensions
+      const { width, height } = await image.getSizeAsync();
+
+      return {
+        success: true,
+        name: imageName,
+        imageHash: image.hash,
+        width: width,
+        height: height,
+        url: imageUrl
+      };
+    } catch (error) {
+      throw new Error(\`Failed to import image from \${imageUrl}: \${error ? error.message || error.toString() : 'Unknown error'}\`);
+    }
+  `);
+
+  sendProgress({ status: `Successfully imported "${name}" (${result.result.width}×${result.result.height}px)` });
+
+  return result.result;
+}
+
+/**
+ * Tool: create_image_component
+ * Complete workflow: import image, create rectangle, set fill, convert to component
+ */
+async function createImageComponent(api, args, sendProgress) {
+  const { url, componentName, width, height, maxWidth, maxHeight, scaleMode = 'FILL', cornerRadius = 0 } = args;
+
+  if (!url || !componentName) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: url and componentName'
+    };
+  }
+
+  sendProgress({ status: `Creating image component "${componentName}" from ${url}...` });
+
+  const result = await api.executeInFigma(`
+    const imageUrl = "${url}";
+    const compName = "${componentName}";
+    const specifiedWidth = ${width !== undefined ? width : 'null'};
+    const specifiedHeight = ${height !== undefined ? height : 'null'};
+    const maxW = ${maxWidth !== undefined ? maxWidth : 'null'};
+    const maxH = ${maxHeight !== undefined ? maxHeight : 'null'};
+    const scale = "${scaleMode}";
+    const radius = ${cornerRadius};
+
+    try {
+      // Import image from URL
+      const image = await figma.createImageAsync(imageUrl);
+
+      // Get actual image dimensions
+      const { width: imgWidth, height: imgHeight } = await image.getSizeAsync();
+
+      // Calculate target dimensions
+      let targetWidth = specifiedWidth || imgWidth;
+      let targetHeight = specifiedHeight || imgHeight;
+
+      // If only one dimension specified, calculate the other maintaining aspect ratio
+      if (specifiedWidth && !specifiedHeight) {
+        targetHeight = Math.round((imgHeight / imgWidth) * specifiedWidth);
+      } else if (specifiedHeight && !specifiedWidth) {
+        targetWidth = Math.round((imgWidth / imgHeight) * specifiedHeight);
+      }
+
+      // Apply max constraints if specified
+      if (maxW && targetWidth > maxW) {
+        const ratio = maxW / targetWidth;
+        targetWidth = maxW;
+        targetHeight = Math.round(targetHeight * ratio);
+      }
+      if (maxH && targetHeight > maxH) {
+        const ratio = maxH / targetHeight;
+        targetHeight = maxH;
+        targetWidth = Math.round(targetWidth * ratio);
+      }
+
+      // Create component directly
+      const component = figma.createComponent();
+      component.name = compName;
+      component.resize(targetWidth, targetHeight);
+
+      // Set corner radius if specified
+      if (radius > 0) {
+        component.cornerRadius = radius;
+      }
+
+      // Set image fill
+      component.fills = [{
+        type: 'IMAGE',
+        imageHash: image.hash,
+        scaleMode: scale
+      }];
+
+      // Position component at origin
+      component.x = 0;
+      component.y = 0;
+
+      return {
+        success: true,
+        componentId: component.id,
+        componentName: component.name,
+        imageHash: image.hash,
+        width: targetWidth,
+        height: targetHeight
+      };
+    } catch (error) {
+      throw new Error(\`Failed to create image component: \${error.message}\`);
+    }
+  `);
+
+  sendProgress({ status: `Successfully created component "${componentName}" (${result.result.componentId})` });
+
+  return result.result;
+}
+
+/**
+ * Tool: batch_create_image_components
+ * Batch create multiple image components and optionally combine into ComponentSet
+ */
+async function batchCreateImageComponents(api, args, sendProgress) {
+  const {
+    images,
+    createComponentSet = false,
+    variantProperty = 'Type',
+    scaleMode = 'FILL',
+    cornerRadius = 0
+  } = args;
+
+  if (!images || !Array.isArray(images) || images.length === 0) {
+    throw {
+      code: -32602,
+      message: 'Missing or invalid images array'
+    };
+  }
+
+  sendProgress({ status: `Batch creating ${images.length} image components...` });
+
+  const result = await api.executeInFigma(`
+    const imageSpecs = ${JSON.stringify(images)};
+    const shouldCreateSet = ${createComponentSet};
+    const variantProp = "${variantProperty}";
+    const scale = "${scaleMode}";
+    const radius = ${cornerRadius};
+
+    const components = [];
+    const spacing = 100; // Space between components
+
+    try {
+      // Create each component
+      for (let i = 0; i < imageSpecs.length; i++) {
+        const spec = imageSpecs[i];
+
+        // Import image
+        const image = await figma.createImageAsync(spec.url);
+
+        // Get actual image dimensions
+        const { width: imgWidth, height: imgHeight } = await image.getSizeAsync();
+
+        // Calculate target dimensions with aspect ratio preservation
+        let targetWidth = spec.width || imgWidth;
+        let targetHeight = spec.height || imgHeight;
+
+        // If only one dimension specified, calculate the other maintaining aspect ratio
+        if (spec.width && !spec.height) {
+          targetHeight = Math.round((imgHeight / imgWidth) * spec.width);
+        } else if (spec.height && !spec.width) {
+          targetWidth = Math.round((imgWidth / imgHeight) * spec.height);
+        }
+
+        // Apply max constraints if specified
+        if (spec.maxWidth && targetWidth > spec.maxWidth) {
+          const ratio = spec.maxWidth / targetWidth;
+          targetWidth = spec.maxWidth;
+          targetHeight = Math.round(targetHeight * ratio);
+        }
+        if (spec.maxHeight && targetHeight > spec.maxHeight) {
+          const ratio = spec.maxHeight / targetHeight;
+          targetHeight = spec.maxHeight;
+          targetWidth = Math.round(targetWidth * ratio);
+        }
+
+        // Create component directly
+        const component = figma.createComponent();
+        component.name = spec.name;
+        component.resize(targetWidth, targetHeight);
+
+        // Set image fill
+        component.fills = [{
+          type: 'IMAGE',
+          imageHash: image.hash,
+          scaleMode: scale
+        }];
+
+        // Set corner radius if specified
+        if (radius > 0) {
+          component.cornerRadius = radius;
+        }
+
+        // Position components in a row
+        component.x = i * spacing;
+        component.y = 0;
+
+        components.push({
+          id: component.id,
+          name: component.name,
+          node: component
+        });
+      }
+
+      let componentSetId = null;
+      let componentSetName = null;
+
+      // Combine into ComponentSet if requested
+      if (shouldCreateSet && components.length > 0) {
+        // Rename components with variant property pattern
+        components.forEach(comp => {
+          const variantValue = comp.name;
+          comp.node.name = \`\${variantProp}=\${variantValue}\`;
+        });
+
+        // Combine into ComponentSet
+        const componentSet = figma.combineAsVariants(
+          components.map(c => c.node),
+          figma.currentPage
+        );
+
+        // Set vertical layout with spacing
+        componentSet.layoutMode = 'VERTICAL';
+        componentSet.itemSpacing = 20;
+        componentSet.counterAxisAlignItems = 'MIN';
+        componentSet.primaryAxisAlignItems = 'MIN';
+
+        componentSetId = componentSet.id;
+        componentSetName = componentSet.name;
+      }
+
+      return {
+        success: true,
+        componentsCreated: components.length,
+        componentIds: components.map(c => c.id),
+        componentNames: components.map(c => c.name),
+        componentSetId: componentSetId,
+        componentSetName: componentSetName
+      };
+    } catch (error) {
+      throw new Error(\`Failed to batch create components: \${error.message}\`);
+    }
+  `);
+
+  const summary = createComponentSet
+    ? `Created ${result.result.componentsCreated} components in ComponentSet "${result.result.componentSetName}"`
+    : `Created ${result.result.componentsCreated} individual components`;
+
+  sendProgress({ status: summary });
+
+  return result.result;
+}
+
+/**
+ * Clone any Figma node (component, frame, group, text, etc.)
+ * Generic cloning tool that works with all SceneNode types
+ */
+async function cloneNode(api, args, sendProgress) {
+  const {
+    nodeId,
+    newName,
+    offsetX = 100,
+    offsetY = 0
+  } = args;
+
+  if (!nodeId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: nodeId'
+    };
+  }
+
+  sendProgress({ status: `Cloning node ${nodeId}...` });
+
+  const result = await api.executeInFigma(`
+    const sourceNode = figma.getNodeById("${nodeId}");
+
+    if (!sourceNode) {
+      throw new Error("Node not found: ${nodeId}");
+    }
+
+    // Clone the node
+    const clonedNode = sourceNode.clone();
+
+    // Rename if specified
+    ${newName ? `clonedNode.name = "${newName}";` : ''}
+
+    // Position offset from original
+    clonedNode.x = sourceNode.x + ${offsetX};
+    clonedNode.y = sourceNode.y + ${offsetY};
+
+    // Add to same parent as source
+    if (sourceNode.parent && sourceNode.parent.type !== "PAGE") {
+      sourceNode.parent.appendChild(clonedNode);
+    } else {
+      figma.currentPage.appendChild(clonedNode);
+    }
+
+    // Center in viewport
+    figma.viewport.scrollAndZoomIntoView([clonedNode]);
+
+    return {
+      success: true,
+      clonedNodeId: clonedNode.id,
+      clonedNodeName: clonedNode.name,
+      clonedNodeType: clonedNode.type,
+      sourceNodeId: sourceNode.id,
+      sourceNodeName: sourceNode.name,
+      sourceNodeType: sourceNode.type,
+      position: {
+        x: clonedNode.x,
+        y: clonedNode.y
+      }
+    };
+  `);
+
+  sendProgress({ status: `Cloned ${result.result.sourceNodeType} "${result.result.sourceNodeName}"` });
+
+  return result.result;
+}
+
+/**
+ * Reorder children within a parent node
+ * Supports two modes:
+ * 1. Full reorder - provide complete childOrder array
+ * 2. Single move - provide nodeId + newIndex
+ */
+async function reorderChildren(api, args, sendProgress) {
+  const { parentId, childOrder, nodeId, newIndex } = args;
+
+  if (!parentId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: parentId'
+    };
+  }
+
+  // Validate: Must provide either childOrder OR (nodeId + newIndex)
+  const hasChildOrder = childOrder && Array.isArray(childOrder);
+  const hasSingleMove = nodeId && newIndex !== undefined;
+
+  if (hasChildOrder && hasSingleMove) {
+    throw {
+      code: -32602,
+      message: 'Provide either childOrder (full reorder) OR nodeId+newIndex (single move), not both'
+    };
+  }
+
+  if (!hasChildOrder && !hasSingleMove) {
+    throw {
+      code: -32602,
+      message: 'Must provide either childOrder array or nodeId+newIndex parameters'
+    };
+  }
+
+  if (hasChildOrder) {
+    // Full reorder approach
+    sendProgress({ status: `Reordering ${childOrder.length} children of parent ${parentId}...` });
+
+    const result = await api.executeInFigma(`
+      const parent = figma.getNodeById("${parentId}");
+      if (!parent) throw new Error("Parent node not found: ${parentId}");
+      if (!parent.children) throw new Error("Node has no children: ${parentId}");
+
+      const childOrder = ${JSON.stringify(childOrder)};
+      const currentChildren = parent.children;
+
+      // Validate all IDs are children of this parent
+      for (const childId of childOrder) {
+        if (!currentChildren.find(c => c.id === childId)) {
+          throw new Error("Child " + childId + " is not a child of parent " + parent.id);
+        }
+      }
+
+      // Reorder by removing and re-inserting at correct index
+      for (let i = 0; i < childOrder.length; i++) {
+        const child = figma.getNodeById(childOrder[i]);
+        parent.insertChild(i, child);
+      }
+
+      return {
+        success: true,
+        parentId: parent.id,
+        parentName: parent.name,
+        parentType: parent.type,
+        totalChildren: parent.children.length,
+        newOrder: parent.children.map(c => ({ id: c.id, name: c.name, type: c.type }))
+      };
+    `);
+
+    sendProgress({ status: `Reordered ${childOrder.length} children successfully` });
+
+    return result.result;
+  } else {
+    // Single node move approach
+    sendProgress({ status: `Moving node ${nodeId} to index ${newIndex} in parent ${parentId}...` });
+
+    const result = await api.executeInFigma(`
+      const parent = figma.getNodeById("${parentId}");
+      if (!parent) throw new Error("Parent node not found: ${parentId}");
+      if (!parent.children) throw new Error("Node has no children: ${parentId}");
+
+      const child = figma.getNodeById("${nodeId}");
+      if (!child) throw new Error("Child node not found: ${nodeId}");
+
+      // Validate child belongs to this parent
+      if (child.parent.id !== parent.id) {
+        throw new Error("Node " + child.id + " is not a child of parent " + parent.id);
+      }
+
+      // Validate index is within bounds
+      const maxIndex = parent.children.length - 1;
+      if (${newIndex} < 0 || ${newIndex} > maxIndex) {
+        throw new Error("Index ${newIndex} out of bounds (0 to " + maxIndex + ")");
+      }
+
+      // Move to new index
+      parent.insertChild(${newIndex}, child);
+
+      return {
+        success: true,
+        parentId: parent.id,
+        parentName: parent.name,
+        parentType: parent.type,
+        movedNode: { id: child.id, name: child.name, type: child.type },
+        newIndex: ${newIndex},
+        totalChildren: parent.children.length,
+        newOrder: parent.children.map(c => ({ id: c.id, name: c.name, type: c.type }))
+      };
+    `);
+
+    sendProgress({ status: `Moved "${result.result.movedNode.name}" to index ${newIndex}` });
+
+    return result.result;
+  }
+}
+
+/**
+ * Execute arbitrary Figma Plugin API script
+ * General-purpose tool for custom operations and complex workflows
+ */
+async function executeFigmaScript(api, args, sendProgress) {
+  const { script, description } = args;
+
+  if (!script) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: script'
+    };
+  }
+
+  const desc = description || 'Executing Figma script';
+  sendProgress({ status: desc });
+
+  try {
+    const result = await api.executeInFigma(script);
+
+    sendProgress({ status: 'Script executed successfully' });
+
+    return result.result;
+  } catch (error) {
+    throw {
+      code: -32000,
+      message: `Script execution failed: ${error.message || error}`,
+      data: { script: script.substring(0, 200) + '...' } // Include snippet for debugging
+    };
+  }
+}
+
 module.exports = {
   create_component: createComponent,
   create_auto_layout: createAutoLayout,
@@ -1203,15 +2047,26 @@ module.exports = {
   add_children: addChildren,
   modify_node: modifyNode,
   add_component_property: addComponentProperty,
+  edit_component_property: editComponentProperty,
+  delete_component_property: deleteComponentProperty,
   bind_text_to_property: bindTextToProperty,
+  bind_property_reference: bindPropertyReference,
   set_text_truncation: setTextTruncation,
   set_instance_properties: setInstanceProperties,
   swap_component: swapComponent,
   get_component_properties: getComponentProperties,
   get_instance_properties: getInstanceProperties,
   create_component_variants: createComponentVariants,
+  add_variant_to_component_set: addVariantToComponentSet,
   rename_node: renameNode,
   create_variable: createVariable,
   create_text_style: createTextStyle,
-  delete_text_style: deleteTextStyle
+  delete_text_style: deleteTextStyle,
+  delete_node: deleteNode,
+  clone_node: cloneNode,
+  reorder_children: reorderChildren,
+  import_image_from_url: importImageFromUrl,
+  create_image_component: createImageComponent,
+  batch_create_image_components: batchCreateImageComponents,
+  execute_figma_script: executeFigmaScript
 };
