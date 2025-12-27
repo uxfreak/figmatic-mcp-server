@@ -3042,6 +3042,232 @@ async function copyAllProperties(api, args, sendProgress) {
   };
 }
 
+/**
+ * WORKFLOW: Apply image fill from URL to a node (one-step operation)
+ * Intuitive high-level tool that imports image and applies fill atomically
+ */
+async function applyImageFill(api, args, sendProgress) {
+  const { nodeId, imageUrl, scaleMode = 'FILL', opacity = 1, rotation = 0, filters = {}, crop, tileScale = 1 } = args;
+
+  if (!nodeId || !imageUrl) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: nodeId and imageUrl'
+    };
+  }
+
+  sendProgress({ status: `Importing image from ${imageUrl}...` });
+
+  const result = await api.executeInFigma(`
+    const nodeId = "${nodeId}";
+    const imageUrl = "${imageUrl}";
+    const scaleMode = "${scaleMode}";
+    const opacity = ${opacity};
+    const rotation = ${rotation};
+    const filters = ${JSON.stringify(filters)};
+    const crop = ${JSON.stringify(crop)};
+    const tileScale = ${tileScale};
+
+    const node = figma.getNodeById(nodeId);
+    if (!node) {
+      throw new Error("Node not found: " + nodeId);
+    }
+
+    if (!('fills' in node)) {
+      throw new Error("Node does not support fills. Node type: " + node.type);
+    }
+
+    // Import image from URL
+    let image;
+    try {
+      image = await figma.createImageAsync(imageUrl);
+    } catch (err) {
+      throw new Error("Failed to load image: " + err.message);
+    }
+
+    // Build image fill paint object
+    const imageFill = {
+      type: 'IMAGE',
+      imageHash: image.hash,
+      scaleMode: scaleMode,
+      opacity: opacity
+    };
+
+    // Add rotation if specified
+    if (rotation !== 0) {
+      imageFill.rotation = rotation;
+    }
+
+    // Add filters if specified
+    if (Object.keys(filters).length > 0) {
+      imageFill.filters = filters;
+    }
+
+    // Add imageTransform for CROP mode
+    if (scaleMode === 'CROP' && crop) {
+      imageFill.imageTransform = [[1, 0, crop.x || 0], [0, 1, crop.y || 0]];
+    }
+
+    // Add scalingFactor for TILE mode
+    if (scaleMode === 'TILE') {
+      imageFill.scalingFactor = tileScale;
+    }
+
+    // Apply the fill
+    node.fills = [imageFill];
+
+    // Get image dimensions for return value
+    const { width, height } = await image.getSizeAsync();
+
+    return {
+      success: true,
+      nodeId: node.id,
+      nodeName: node.name,
+      nodeType: node.type,
+      imageHash: image.hash,
+      imageDimensions: { width, height },
+      appliedFill: {
+        scaleMode,
+        opacity,
+        rotation,
+        hasFilters: Object.keys(filters).length > 0
+      }
+    };
+  `);
+
+  sendProgress({ status: 'Image fill applied successfully' });
+  return result.result;
+}
+
+/**
+ * WORKFLOW: Apply gradient fill to a node with intuitive angle-based API
+ * Converts simple angle parameter to gradientTransform matrix
+ */
+async function applyGradientFill(api, args, sendProgress) {
+  const { nodeId, gradientType = 'linear', angle = 90, colors, opacity = 1 } = args;
+
+  if (!nodeId || !colors || !Array.isArray(colors) || colors.length < 2) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: nodeId and colors array (minimum 2 colors)'
+    };
+  }
+
+  sendProgress({ status: `Applying ${gradientType} gradient to node ${nodeId}...` });
+
+  const result = await api.executeInFigma(`
+    const nodeId = "${nodeId}";
+    const gradientType = "${gradientType}";
+    const angle = ${angle};
+    const colorsJson = ${JSON.stringify(colors)};
+    const opacity = ${opacity};
+
+    const node = figma.getNodeById(nodeId);
+    if (!node) {
+      throw new Error("Node not found: " + nodeId);
+    }
+
+    if (!('fills' in node)) {
+      throw new Error("Node does not support fills. Node type: " + node.type);
+    }
+
+    // Helper function to parse color (hex or RGB object)
+    function parseColor(colorInput) {
+      if (typeof colorInput === 'string') {
+        // Parse hex color
+        const hex = colorInput.replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16) / 255;
+        const g = parseInt(hex.substring(2, 4), 16) / 255;
+        const b = parseInt(hex.substring(4, 6), 16) / 255;
+        const a = hex.length === 8 ? parseInt(hex.substring(6, 8), 16) / 255 : 1;
+        return { r, g, b, a };
+      } else if (typeof colorInput === 'object') {
+        // Already RGB object
+        return {
+          r: colorInput.r ?? 0,
+          g: colorInput.g ?? 0,
+          b: colorInput.b ?? 0,
+          a: colorInput.a ?? 1
+        };
+      }
+      throw new Error("Invalid color format: " + colorInput);
+    }
+
+    // Generate gradient stops with smart positioning
+    const gradientStops = colorsJson.map((colorSpec, index) => {
+      let color, position;
+
+      if (typeof colorSpec === 'string') {
+        // Simple hex color - distribute evenly
+        color = parseColor(colorSpec);
+        position = index / (colorsJson.length - 1);
+      } else if (typeof colorSpec === 'object') {
+        // Object with color and optional position
+        color = parseColor(colorSpec.color);
+        position = colorSpec.position !== undefined ? colorSpec.position : index / (colorsJson.length - 1);
+      }
+
+      return { color, position };
+    });
+
+    // Generate gradientTransform based on type and angle
+    let gradientTransform;
+
+    if (gradientType === 'linear') {
+      // Convert angle to radians
+      const angleRad = (angle * Math.PI) / 180;
+      const cos = Math.cos(angleRad);
+      const sin = Math.sin(angleRad);
+
+      // Transform matrix for linear gradient at given angle
+      gradientTransform = [
+        [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+        [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+      ];
+    } else {
+      // For radial, angular, and diamond - use identity transform (centered)
+      gradientTransform = [[1, 0, 0], [0, 1, 0]];
+    }
+
+    // Map gradient type to Figma constant
+    const gradientTypeMap = {
+      'linear': 'GRADIENT_LINEAR',
+      'radial': 'GRADIENT_RADIAL',
+      'angular': 'GRADIENT_ANGULAR',
+      'diamond': 'GRADIENT_DIAMOND'
+    };
+
+    const figmaGradientType = gradientTypeMap[gradientType];
+    if (!figmaGradientType) {
+      throw new Error("Invalid gradient type: " + gradientType + ". Use: linear, radial, angular, diamond");
+    }
+
+    // Apply gradient fill
+    node.fills = [{
+      type: figmaGradientType,
+      gradientTransform: gradientTransform,
+      gradientStops: gradientStops,
+      opacity: opacity
+    }];
+
+    return {
+      success: true,
+      nodeId: node.id,
+      nodeName: node.name,
+      nodeType: node.type,
+      appliedGradient: {
+        type: gradientType,
+        angle: gradientType === 'linear' ? angle : null,
+        colorCount: gradientStops.length,
+        opacity: opacity
+      }
+    };
+  `);
+
+  sendProgress({ status: 'Gradient fill applied successfully' });
+  return result.result;
+}
+
 module.exports = {
   create_component: createComponent,
   create_auto_layout: createAutoLayout,
@@ -3075,6 +3301,8 @@ module.exports = {
   import_image_from_url: importImageFromUrl,
   create_image_component: createImageComponent,
   batch_create_image_components: batchCreateImageComponents,
+  apply_image_fill: applyImageFill,
+  apply_gradient_fill: applyGradientFill,
   execute_figma_script: executeFigmaScript,
   set_nested_instance_exposure: setNestedInstanceExposure,
   expose_nested_instance_by_path: exposeNestedInstanceByPath,

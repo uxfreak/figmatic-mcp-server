@@ -1328,6 +1328,123 @@ const batchCreateImageComponents = {
   }
 };
 
+const applyImageFill = {
+  name: 'apply_image_fill',
+  description: 'WORKFLOW: Apply image fill from URL to a node in one step. Imports image and applies fill atomically with smart defaults. Supports all scale modes (FILL, FIT, CROP, TILE), filters, and rotation.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'Node ID to apply image fill to'
+      },
+      imageUrl: {
+        type: 'string',
+        description: 'Image URL (PNG, JPG, or GIF, max 4096x4096px)'
+      },
+      scaleMode: {
+        type: 'string',
+        enum: ['FILL', 'FIT', 'CROP', 'TILE'],
+        description: 'How image fills the node. FILL (default): fills entire area, may crop. FIT: shows full image, may not fill area. CROP: precise positioning with crop parameter. TILE: repeating pattern.',
+        default: 'FILL'
+      },
+      opacity: {
+        type: 'number',
+        description: 'Fill opacity (0-1). Default: 1',
+        default: 1,
+        minimum: 0,
+        maximum: 1
+      },
+      rotation: {
+        type: 'number',
+        enum: [0, 90, 180, 270],
+        description: 'Image rotation in degrees (90° increments only). Default: 0',
+        default: 0
+      },
+      filters: {
+        type: 'object',
+        description: 'Image adjustment filters (all values -1 to 1)',
+        properties: {
+          exposure: { type: 'number', minimum: -1, maximum: 1 },
+          contrast: { type: 'number', minimum: -1, maximum: 1 },
+          saturation: { type: 'number', minimum: -1, maximum: 1 },
+          temperature: { type: 'number', minimum: -1, maximum: 1 },
+          tint: { type: 'number', minimum: -1, maximum: 1 },
+          highlights: { type: 'number', minimum: -1, maximum: 1 },
+          shadows: { type: 'number', minimum: -1, maximum: 1 }
+        }
+      },
+      crop: {
+        type: 'object',
+        description: 'Crop offset for CROP mode (normalized 0-1)',
+        properties: {
+          x: { type: 'number', minimum: 0, maximum: 1 },
+          y: { type: 'number', minimum: 0, maximum: 1 }
+        }
+      },
+      tileScale: {
+        type: 'number',
+        description: 'Tile size multiplier for TILE mode. Default: 1',
+        default: 1
+      }
+    },
+    required: ['nodeId', 'imageUrl']
+  }
+};
+
+const applyGradientFill = {
+  name: 'apply_gradient_fill',
+  description: 'WORKFLOW: Apply gradient fill to a node with intuitive angle-based API. Supports all gradient types (linear, radial, angular, diamond) with automatic color stop distribution. Accepts hex colors or RGB objects.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'Node ID to apply gradient fill to'
+      },
+      gradientType: {
+        type: 'string',
+        enum: ['linear', 'radial', 'angular', 'diamond'],
+        description: 'Gradient type. linear: straight line. radial: outward from center. angular: clockwise rotation. diamond: diagonal spread. Default: linear',
+        default: 'linear'
+      },
+      angle: {
+        type: 'number',
+        description: 'Gradient angle in degrees (0-360). Only for linear gradients. 0=right, 90=down, 180=left, 270=up. Default: 90 (vertical)',
+        default: 90,
+        minimum: 0,
+        maximum: 360
+      },
+      colors: {
+        type: 'array',
+        description: 'Array of colors (minimum 2). Can be hex strings "#FF0000" or objects with color and position {color: "#FF0000", position: 0.5}. Positions auto-distributed if not specified.',
+        items: {
+          oneOf: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: {
+                color: { type: 'string' },
+                position: { type: 'number', minimum: 0, maximum: 1 }
+              },
+              required: ['color']
+            }
+          ]
+        },
+        minItems: 2
+      },
+      opacity: {
+        type: 'number',
+        description: 'Gradient opacity (0-1). Default: 1',
+        default: 1,
+        minimum: 0,
+        maximum: 1
+      }
+    },
+    required: ['nodeId', 'colors']
+  }
+};
+
 const setNestedInstanceExposure = {
   name: 'set_nested_instance_exposure',
   description: 'PRIMITIVE: Set isExposedInstance flag on a nested instance node. This makes the instance\'s properties accessible from its parent instance. Requires exact node ID (use get_nested_instance_tree to discover node IDs). Returns exposedInstanceId in format "I{parentId};{childId}" for use with set_instance_properties.',
@@ -1498,6 +1615,8 @@ function getAllSchemas() {
     importImageFromUrl,
     createImageComponent,
     batchCreateImageComponents,
+    applyImageFill,
+    applyGradientFill,
     // NESTED INSTANCE tools
     setNestedInstanceExposure,
     exposeNestedInstanceByPath,
@@ -1553,6 +1672,8 @@ module.exports = {
   importImageFromUrl,
   createImageComponent,
   batchCreateImageComponents,
+  applyImageFill,
+  applyGradientFill,
   setNestedInstanceExposure,
   exposeNestedInstanceByPath,
   copyBindings,
