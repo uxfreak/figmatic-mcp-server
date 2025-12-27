@@ -281,6 +281,135 @@ async function bindVariable(api, args, sendProgress) {
 }
 
 /**
+ * Bind variables to multiple nodes in a single operation
+ * Batch workflow tool for efficient bulk variable binding
+ */
+async function batchBindVariables(api, args, sendProgress) {
+  const { bindings } = args;
+
+  if (!bindings || !Array.isArray(bindings) || bindings.length === 0) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: bindings array'
+    };
+  }
+
+  // Validate each binding has required fields
+  for (let i = 0; i < bindings.length; i++) {
+    const binding = bindings[i];
+    if (!binding.nodeId || !binding.variableName || !binding.property) {
+      throw {
+        code: -32602,
+        message: `Binding at index ${i} missing required fields: nodeId, variableName, property`
+      };
+    }
+  }
+
+  sendProgress({ status: `Binding ${bindings.length} variables...` });
+
+  const result = await api.executeInFigma(`
+    const bindings = ${JSON.stringify(bindings)};
+
+    // Look up all variables once (performance optimization)
+    const allVars = await figma.variables.getLocalVariablesAsync();
+
+    const results = [];
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const binding of bindings) {
+      try {
+        const node = figma.getNodeById(binding.nodeId);
+        if (!node) {
+          results.push({
+            nodeId: binding.nodeId,
+            variableName: binding.variableName,
+            property: binding.property,
+            success: false,
+            error: "Node not found"
+          });
+          errorCount++;
+          continue;
+        }
+
+        const variable = allVars.find(v => v.name === binding.variableName);
+        if (!variable) {
+          results.push({
+            nodeId: binding.nodeId,
+            nodeName: node.name,
+            variableName: binding.variableName,
+            property: binding.property,
+            success: false,
+            error: "Variable not found"
+          });
+          errorCount++;
+          continue;
+        }
+
+        // Apply binding using same logic as bind_variable tool
+        const property = binding.property;
+
+        if (property === 'fills') {
+          // For fills, use setBoundVariableForPaint
+          const fills = node.fills && node.fills.length > 0
+            ? node.fills
+            : [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 }, visible: true }];
+          const boundPaint = figma.variables.setBoundVariableForPaint(fills[0], 'color', variable);
+          boundPaint.visible = true;
+          node.fills = [boundPaint];
+        } else if (property === 'strokes') {
+          // For strokes, use setBoundVariableForPaint
+          const strokes = node.strokes && node.strokes.length > 0
+            ? node.strokes
+            : [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 }, visible: true }];
+          const boundPaint = figma.variables.setBoundVariableForPaint(strokes[0], 'color', variable);
+          boundPaint.visible = true;
+          node.strokes = [boundPaint];
+        } else {
+          // For other properties (width, height, padding, etc.)
+          node.setBoundVariable(property, variable);
+        }
+
+        results.push({
+          nodeId: binding.nodeId,
+          nodeName: node.name,
+          nodeType: node.type,
+          variableName: binding.variableName,
+          variableId: variable.id,
+          property: binding.property,
+          success: true
+        });
+        successCount++;
+      } catch (err) {
+        results.push({
+          nodeId: binding.nodeId,
+          variableName: binding.variableName,
+          property: binding.property,
+          success: false,
+          error: err.message
+        });
+        errorCount++;
+      }
+    }
+
+    return {
+      success: true,
+      totalBindings: bindings.length,
+      successCount: successCount,
+      errorCount: errorCount,
+      results: results
+    };
+  `);
+
+  const resultData = result.result;
+  sendProgress({
+    status: `Bound ${resultData.successCount} of ${resultData.totalBindings} variables (${resultData.errorCount} errors)`
+  });
+
+  return resultData;
+}
+
+/**
  * Tool 5: create_instance
  * Create an instance of a component
  */
@@ -374,6 +503,9 @@ async function addChildren(api, args, sendProgress) {
     const children = ${JSON.stringify(children)};
     const createdNodes = [];
 
+    // Look up all variables once (performance optimization for bindings)
+    const allVars = await figma.variables.getLocalVariablesAsync();
+
     for (const childSpec of children) {
       let child = null;
 
@@ -386,6 +518,11 @@ async function addChildren(api, args, sendProgress) {
           }
           child = component.createInstance();
           child.name = childSpec.name;
+
+          // NEW: Set component properties if provided (Issue #2)
+          if (childSpec.componentProperties) {
+            child.setProperties(childSpec.componentProperties);
+          }
           break;
 
         case 'text':
@@ -451,6 +588,63 @@ async function addChildren(api, args, sendProgress) {
             child.fills = childSpec.fills;
           }
           break;
+      }
+
+      // NEW: Apply variable bindings if provided (Issue #3)
+      if (child && childSpec.bindings) {
+        for (const [property, variableName] of Object.entries(childSpec.bindings)) {
+          try {
+            const variable = allVars.find(v => v.name === variableName);
+            if (variable) {
+              // Use same logic as bind_variable tool
+              if (property === 'fills') {
+                const fills = child.fills && child.fills.length > 0
+                  ? child.fills
+                  : [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 }, visible: true }];
+                const boundPaint = figma.variables.setBoundVariableForPaint(fills[0], 'color', variable);
+                boundPaint.visible = true;
+                child.fills = [boundPaint];
+              } else if (property === 'strokes') {
+                const strokes = child.strokes && child.strokes.length > 0
+                  ? child.strokes
+                  : [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 }, visible: true }];
+                const boundPaint = figma.variables.setBoundVariableForPaint(strokes[0], 'color', variable);
+                boundPaint.visible = true;
+                child.strokes = [boundPaint];
+              } else {
+                child.setBoundVariable(property, variable);
+              }
+            }
+          } catch (err) {
+            // Continue on binding errors - don't fail entire operation
+            console.warn(\`Failed to bind \${property} to \${variableName}: \${err.message}\`);
+          }
+        }
+      }
+
+      // NEW: Apply styles if provided (effectStyleId, fillStyleId, strokeStyleId)
+      if (child) {
+        if (childSpec.effectStyleId) {
+          try {
+            child.effectStyleId = childSpec.effectStyleId;
+          } catch (err) {
+            console.warn(\`Failed to apply effect style: \${err.message}\`);
+          }
+        }
+        if (childSpec.fillStyleId) {
+          try {
+            child.fillStyleId = childSpec.fillStyleId;
+          } catch (err) {
+            console.warn(\`Failed to apply fill style: \${err.message}\`);
+          }
+        }
+        if (childSpec.strokeStyleId) {
+          try {
+            child.strokeStyleId = childSpec.strokeStyleId;
+          } catch (err) {
+            console.warn(\`Failed to apply stroke style: \${err.message}\`);
+          }
+        }
       }
 
       if (child) {
@@ -2007,6 +2201,81 @@ async function reorderChildren(api, args, sendProgress) {
 }
 
 /**
+ * Move a node from one parent to another (reparenting)
+ * Supports optional index positioning in new parent
+ */
+async function moveNode(api, args, sendProgress) {
+  const { nodeId, newParentId, index } = args;
+
+  // Validate required parameters
+  if (!nodeId || !newParentId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: nodeId, newParentId'
+    };
+  }
+
+  const hasIndex = index !== undefined;
+  const action = hasIndex ? `inserting at index ${index}` : 'appending to end';
+  sendProgress({ status: `Moving node ${nodeId} to parent ${newParentId} (${action})...` });
+
+  const result = await api.executeInFigma(`
+    const node = figma.getNodeById("${nodeId}");
+    if (!node) {
+      throw new Error("Node not found: ${nodeId}");
+    }
+
+    const newParent = figma.getNodeById("${newParentId}");
+    if (!newParent) {
+      throw new Error("New parent not found: ${newParentId}");
+    }
+
+    // Validate newParent supports children
+    if (!newParent.children) {
+      throw new Error("New parent cannot have children: " + newParent.type);
+    }
+
+    const oldParent = node.parent;
+    const oldParentId = oldParent ? oldParent.id : null;
+    const oldParentName = oldParent ? oldParent.name : 'root';
+
+    // Perform the move
+    const hasIndex = ${hasIndex};
+    if (hasIndex) {
+      // Validate index
+      const maxIndex = newParent.children.length;
+      if (${index} < 0 || ${index} > maxIndex) {
+        throw new Error("Index ${index} out of bounds (0 to " + maxIndex + ")");
+      }
+      newParent.insertChild(${index}, node);
+    } else {
+      newParent.appendChild(node);
+    }
+
+    return {
+      success: true,
+      nodeId: node.id,
+      nodeName: node.name,
+      nodeType: node.type,
+      oldParentId: oldParentId,
+      oldParentName: oldParentName,
+      newParentId: newParent.id,
+      newParentName: newParent.name,
+      newParentType: newParent.type,
+      finalIndex: newParent.children.indexOf(node),
+      newParentChildCount: newParent.children.length
+    };
+  `);
+
+  const resultData = result.result;
+  sendProgress({
+    status: `Moved "${resultData.nodeName}" from "${resultData.oldParentName}" to "${resultData.newParentName}" at index ${resultData.finalIndex}`
+  });
+
+  return resultData;
+}
+
+/**
  * Execute arbitrary Figma Plugin API script
  * General-purpose tool for custom operations and complex workflows
  */
@@ -2595,6 +2864,7 @@ module.exports = {
   create_auto_layout: createAutoLayout,
   create_text_node: createTextNode,
   bind_variable: bindVariable,
+  batch_bind_variables: batchBindVariables,
   create_instance: createInstance,
   add_children: addChildren,
   modify_node: modifyNode,
@@ -2617,6 +2887,7 @@ module.exports = {
   delete_node: deleteNode,
   clone_node: cloneNode,
   reorder_children: reorderChildren,
+  move_node: moveNode,
   import_image_from_url: importImageFromUrl,
   create_image_component: createImageComponent,
   batch_create_image_components: batchCreateImageComponents,

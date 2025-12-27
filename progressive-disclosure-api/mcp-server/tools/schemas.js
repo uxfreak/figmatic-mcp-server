@@ -244,6 +244,39 @@ const bindVariable = {
   }
 };
 
+const batchBindVariables = {
+  name: 'batch_bind_variables',
+  description: 'WORKFLOW: Bind variables to multiple nodes in a single operation. Reduces API calls by processing all bindings in one executeInFigma call. Use for bulk variable binding operations.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      bindings: {
+        type: 'array',
+        description: 'Array of binding specifications',
+        items: {
+          type: 'object',
+          properties: {
+            nodeId: {
+              type: 'string',
+              description: 'Node ID to bind variable to'
+            },
+            variableName: {
+              type: 'string',
+              description: 'Variable name to bind'
+            },
+            property: {
+              type: 'string',
+              description: 'Property to bind (fills, strokes, width, height, opacity, etc.)'
+            }
+          },
+          required: ['nodeId', 'variableName', 'property']
+        }
+      }
+    },
+    required: ['bindings']
+  }
+};
+
 const createInstance = {
   name: 'create_instance',
   description: 'Create an instance of an existing component.',
@@ -270,7 +303,7 @@ const createInstance = {
 
 const addChildren = {
   name: 'add_children',
-  description: 'Add child nodes (instances, text, frames) to an existing parent node. Supports adding multiple children in one call.',
+  description: 'Add child nodes (instances, text, frames) to an existing parent node. Supports adding multiple children in one call. Can set variable bindings and component properties during creation for atomic operations.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -325,6 +358,26 @@ const addChildren = {
               type: 'string',
               enum: ['NONE', 'HORIZONTAL', 'VERTICAL'],
               description: 'For frames: auto-layout mode'
+            },
+            componentProperties: {
+              type: 'object',
+              description: '(instance) Component properties to set (e.g., {"icon#51:22": "phone-icon-id"}). NEW: Set properties during creation.'
+            },
+            bindings: {
+              type: 'object',
+              description: 'NEW: Variable bindings to apply during creation (e.g., {"fills": "Text/text-primary", "width": "Dimensions/width"}). Eliminates need for separate bind_variable calls.'
+            },
+            effectStyleId: {
+              type: 'string',
+              description: 'NEW: Effect style ID to apply (for shadows, blurs, etc.)'
+            },
+            fillStyleId: {
+              type: 'string',
+              description: 'NEW: Fill style ID to apply'
+            },
+            strokeStyleId: {
+              type: 'string',
+              description: 'NEW: Stroke style ID to apply'
             }
           },
           required: ['type', 'name']
@@ -901,6 +954,29 @@ const reorderChildren = {
   }
 };
 
+const moveNode = {
+  name: 'move_node',
+  description: 'PRIMITIVE: Move a node from one parent to another (reparenting). Supports optional index positioning. Complements reorder_children (which moves within same parent).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'ID of node to move'
+      },
+      newParentId: {
+        type: 'string',
+        description: 'ID of new parent node'
+      },
+      index: {
+        type: 'number',
+        description: 'Optional: Position in new parent\'s children (0-based). If omitted, appends to end.'
+      }
+    },
+    required: ['nodeId', 'newParentId']
+  }
+};
+
 const addVariantToComponentSet = {
   name: 'add_variant_to_component_set',
   description: 'Add a new variant to an existing ComponentSet by cloning an existing variant and optionally modifying it. Automatically appends the clone to the ComponentSet.',
@@ -1349,6 +1425,7 @@ function getAllSchemas() {
     createAutoLayout,
     createTextNode,
     bindVariable,
+    batchBindVariables,
     createInstance,
     addChildren,
     modifyNode,
@@ -1370,6 +1447,7 @@ function getAllSchemas() {
     deleteNode,
     cloneNode,
     reorderChildren,
+    moveNode,
     // IMAGE tools
     importImageFromUrl,
     createImageComponent,
@@ -1402,6 +1480,7 @@ module.exports = {
   createAutoLayout,
   createTextNode,
   bindVariable,
+  batchBindVariables,
   createInstance,
   addChildren,
   modifyNode,
@@ -1422,6 +1501,7 @@ module.exports = {
   deleteNode,
   cloneNode,
   reorderChildren,
+  moveNode,
   importImageFromUrl,
   createImageComponent,
   batchCreateImageComponents,
