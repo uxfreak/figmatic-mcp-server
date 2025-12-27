@@ -2038,6 +2038,558 @@ async function executeFigmaScript(api, args, sendProgress) {
   }
 }
 
+/**
+ * Tool: set_nested_instance_exposure
+ * PRIMITIVE: Set isExposedInstance flag on a nested instance node
+ * Directly sets the flag without navigation - requires exact node ID
+ */
+async function setNestedInstanceExposure(api, args, sendProgress) {
+  const { nodeId, isExposed = true } = args;
+
+  if (!nodeId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: nodeId'
+    };
+  }
+
+  sendProgress({ status: `${isExposed ? 'Exposing' : 'Hiding'} instance ${nodeId}...` });
+
+  const result = await api.executeInFigma(`
+    const nodeId = "${nodeId}";
+    const isExposed = ${isExposed};
+    const node = figma.getNodeById(nodeId);
+
+    if (!node) {
+      throw new Error("Node not found: " + nodeId);
+    }
+
+    if (node.type !== "INSTANCE") {
+      throw new Error("Node is not an instance. Found type: " + node.type);
+    }
+
+    // Set the isExposedInstance flag
+    node.isExposedInstance = isExposed;
+
+    // Get parent to construct exposed instance ID
+    let exposedInstanceId = null;
+    if (isExposed && node.parent && node.parent.type === "INSTANCE") {
+      // Exposed instance ID format: I{parentId};{childId}
+      exposedInstanceId = "I" + node.parent.id + ";" + node.id;
+    }
+
+    return {
+      success: true,
+      nodeId: node.id,
+      nodeName: node.name,
+      isExposed: node.isExposedInstance,
+      exposedInstanceId: exposedInstanceId,
+      parentId: node.parent ? node.parent.id : null,
+      parentName: node.parent ? node.parent.name : null
+    };
+  `);
+
+  sendProgress({ status: `Instance ${isExposed ? 'exposed' : 'hidden'} successfully` });
+
+  return result.result;
+}
+
+/**
+ * Tool: expose_nested_instance_by_path
+ * WORKFLOW: Navigate to nested instance via path and expose it in one operation
+ * Combines navigation + validation + exposure for convenience
+ */
+async function exposeNestedInstanceByPath(api, args, sendProgress) {
+  const { parentInstanceId, childPath, isExposed = true } = args;
+
+  if (!parentInstanceId || !childPath || !Array.isArray(childPath) || childPath.length === 0) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: parentInstanceId, childPath (must be non-empty array)'
+    };
+  }
+
+  sendProgress({ status: `Navigating to nested instance via path: ${childPath.join(' → ')}...` });
+
+  const result = await api.executeInFigma(`
+    const parentId = "${parentInstanceId}";
+    const childPath = ${JSON.stringify(childPath)};
+    const isExposed = ${isExposed};
+
+    const parent = figma.getNodeById(parentId);
+    if (!parent) {
+      throw new Error("Parent node not found: " + parentId);
+    }
+
+    // Allow COMPONENT, COMPONENT_SET, or INSTANCE
+    // (You expose instances in component definitions, not just in instances)
+    const validTypes = ["COMPONENT", "COMPONENT_SET", "INSTANCE"];
+    if (!validTypes.includes(parent.type)) {
+      throw new Error(
+        "Parent node must be a COMPONENT, COMPONENT_SET, or INSTANCE. Found type: " + parent.type
+      );
+    }
+
+    // Navigate down the path
+    let currentNode = parent;
+    const traversedPath = [parent.name];
+
+    for (let i = 0; i < childPath.length; i++) {
+      const targetName = childPath[i];
+
+      if (!currentNode.children) {
+        throw new Error("Node '" + currentNode.name + "' has no children. Cannot navigate to '" + targetName + "'");
+      }
+
+      const child = currentNode.children.find(c => c.name === targetName);
+
+      if (!child) {
+        const availableNames = currentNode.children.map(c => c.name).join(', ');
+        throw new Error(
+          "Child '" + targetName + "' not found in '" + currentNode.name + "'. " +
+          "Available children: " + availableNames
+        );
+      }
+
+      currentNode = child;
+      traversedPath.push(child.name);
+    }
+
+    // Validate target is an instance
+    if (currentNode.type !== "INSTANCE") {
+      throw new Error(
+        "Target node '" + currentNode.name + "' is not an instance. Found type: " + currentNode.type + ". " +
+        "Only instances can be exposed."
+      );
+    }
+
+    // Set the isExposedInstance flag
+    currentNode.isExposedInstance = isExposed;
+
+    // Construct exposed instance ID
+    let exposedInstanceId = null;
+    if (isExposed && currentNode.parent && currentNode.parent.type === "INSTANCE") {
+      exposedInstanceId = "I" + currentNode.parent.id + ";" + currentNode.id;
+    }
+
+    return {
+      success: true,
+      targetNodeId: currentNode.id,
+      targetNodeName: currentNode.name,
+      isExposed: currentNode.isExposedInstance,
+      exposedInstanceId: exposedInstanceId,
+      traversedPath: traversedPath,
+      pathDepth: traversedPath.length - 1,
+      parentId: currentNode.parent ? currentNode.parent.id : null
+    };
+  `);
+
+  sendProgress({ status: `Nested instance ${isExposed ? 'exposed' : 'hidden'}: ${result.result.targetNodeName}` });
+
+  return result.result;
+}
+
+/**
+ * Copy bindings from source node to target node
+ * Supports filtering by binding type (variables, text, instanceSwap)
+ * @param {Object} api - Figma bridge API
+ * @param {Object} args - { sourceNodeId, targetNodeId, bindingTypes? }
+ * @param {Function} sendProgress - Progress callback
+ */
+async function copyBindings(api, args, sendProgress) {
+  const { sourceNodeId, targetNodeId, bindingTypes = ['variables', 'text', 'instanceSwap'] } = args;
+
+  if (!sourceNodeId || !targetNodeId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: sourceNodeId, targetNodeId'
+    };
+  }
+
+  // Validate bindingTypes
+  const validTypes = ['variables', 'text', 'instanceSwap'];
+  const requestedTypes = Array.isArray(bindingTypes) ? bindingTypes : [bindingTypes];
+  const invalidTypes = requestedTypes.filter(t => !validTypes.includes(t));
+
+  if (invalidTypes.length > 0) {
+    throw {
+      code: -32602,
+      message: `Invalid binding types: ${invalidTypes.join(', ')}. Valid types: ${validTypes.join(', ')}`
+    };
+  }
+
+  sendProgress({ status: `Copying bindings from ${sourceNodeId} to ${targetNodeId}...` });
+
+  const result = await api.executeInFigma(`
+    const sourceId = "${sourceNodeId}";
+    const targetId = "${targetNodeId}";
+    const bindingTypes = ${JSON.stringify(requestedTypes)};
+
+    const sourceNode = figma.getNodeById(sourceId);
+    const targetNode = figma.getNodeById(targetId);
+
+    if (!sourceNode) {
+      throw new Error("Source node not found: " + sourceId);
+    }
+
+    if (!targetNode) {
+      throw new Error("Target node not found: " + targetId);
+    }
+
+    const copiedBindings = {
+      variables: [],
+      text: [],
+      instanceSwap: []
+    };
+
+    // 1. Copy variable bindings (boundVariables)
+    if (bindingTypes.includes('variables') && sourceNode.boundVariables) {
+      for (const [field, binding] of Object.entries(sourceNode.boundVariables)) {
+        try {
+          // Handle both single variable and array of variables
+          if (Array.isArray(binding)) {
+            // For fields like fills, strokes that can have multiple bindings
+            const variableIds = binding.map(b => b.id);
+            targetNode.setBoundVariable(field, variableIds);
+            copiedBindings.variables.push({
+              field: field,
+              variableIds: variableIds,
+              count: variableIds.length
+            });
+          } else {
+            // For fields with single variable binding
+            targetNode.setBoundVariable(field, binding.id);
+            copiedBindings.variables.push({
+              field: field,
+              variableId: binding.id
+            });
+          }
+        } catch (err) {
+          // Field might not be supported on target node type
+          copiedBindings.variables.push({
+            field: field,
+            error: "Not supported on target node: " + err.message
+          });
+        }
+      }
+    }
+
+    // 2. Copy component property bindings (componentPropertyReferences)
+    if (sourceNode.type === 'INSTANCE' && targetNode.type === 'INSTANCE') {
+      if (sourceNode.componentPropertyReferences) {
+        for (const [field, propertyKey] of Object.entries(sourceNode.componentPropertyReferences)) {
+          try {
+            // Determine binding type
+            if (field === 'mainComponent' && bindingTypes.includes('instanceSwap')) {
+              // INSTANCE_SWAP binding
+              targetNode.componentPropertyReferences = {
+                ...targetNode.componentPropertyReferences,
+                [field]: propertyKey
+              };
+              copiedBindings.instanceSwap.push({
+                field: field,
+                propertyKey: propertyKey
+              });
+            } else if (field === 'characters' && bindingTypes.includes('text')) {
+              // TEXT binding
+              targetNode.componentPropertyReferences = {
+                ...targetNode.componentPropertyReferences,
+                [field]: propertyKey
+              };
+              copiedBindings.text.push({
+                field: field,
+                propertyKey: propertyKey
+              });
+            } else if (bindingTypes.includes('text')) {
+              // Other component property bindings (BOOLEAN, etc.)
+              targetNode.componentPropertyReferences = {
+                ...targetNode.componentPropertyReferences,
+                [field]: propertyKey
+              };
+              copiedBindings.text.push({
+                field: field,
+                propertyKey: propertyKey
+              });
+            }
+          } catch (err) {
+            copiedBindings.text.push({
+              field: field,
+              propertyKey: propertyKey,
+              error: "Failed to copy: " + err.message
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      sourceNodeId: sourceId,
+      targetNodeId: targetId,
+      bindingTypes: bindingTypes,
+      copiedBindings: copiedBindings,
+      totalCopied:
+        copiedBindings.variables.length +
+        copiedBindings.text.length +
+        copiedBindings.instanceSwap.length
+    };
+  `);
+
+  const bindingCounts = result.result.copiedBindings;
+  sendProgress({
+    status: `Copied ${result.result.totalCopied} bindings (${bindingCounts.variables.length} variable, ${bindingCounts.text.length} text, ${bindingCounts.instanceSwap.length} instance swap)`
+  });
+
+  return result.result;
+}
+
+/**
+ * Copy all properties from source node to target node
+ * Includes bindings + direct properties (opacity, visible, locked, etc.)
+ * @param {Object} api - Figma bridge API
+ * @param {Object} args - { sourceNodeId, targetNodeId, includeTypes? }
+ * @param {Function} sendProgress - Progress callback
+ */
+async function copyAllProperties(api, args, sendProgress) {
+  const { sourceNodeId, targetNodeId, includeTypes = ['bindings', 'direct'] } = args;
+
+  if (!sourceNodeId || !targetNodeId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameters: sourceNodeId, targetNodeId'
+    };
+  }
+
+  sendProgress({ status: `Copying all properties from ${sourceNodeId} to ${targetNodeId}...` });
+
+  let copiedBindings = null;
+
+  // 1. Copy bindings if requested
+  if (includeTypes.includes('bindings')) {
+    sendProgress({ status: 'Copying bindings...' });
+    copiedBindings = await copyBindings(api, {
+      sourceNodeId,
+      targetNodeId,
+      bindingTypes: ['variables', 'text', 'instanceSwap']
+    }, sendProgress);
+  }
+
+  // 2. Copy direct properties if requested
+  let copiedDirectProperties = [];
+  if (includeTypes.includes('direct')) {
+    sendProgress({ status: 'Copying direct properties...' });
+
+    const directResult = await api.executeInFigma(`
+      const sourceId = "${sourceNodeId}";
+      const targetId = "${targetNodeId}";
+
+      const sourceNode = figma.getNodeById(sourceId);
+      const targetNode = figma.getNodeById(targetId);
+
+      if (!sourceNode) {
+        throw new Error("Source node not found: " + sourceId);
+      }
+
+      if (!targetNode) {
+        throw new Error("Target node not found: " + targetId);
+      }
+
+      const copiedProps = [];
+
+      // Copy common properties
+      const propertiesToCopy = [
+        'opacity',
+        'visible',
+        'locked',
+        'blendMode'
+      ];
+
+      for (const prop of propertiesToCopy) {
+        try {
+          if (sourceNode[prop] !== undefined && targetNode[prop] !== undefined) {
+            targetNode[prop] = sourceNode[prop];
+            copiedProps.push({ property: prop, value: sourceNode[prop] });
+          }
+        } catch (err) {
+          copiedProps.push({ property: prop, error: err.message });
+        }
+      }
+
+      // Copy layout properties if both are auto-layout frames
+      if (sourceNode.layoutMode !== 'NONE' && targetNode.layoutMode !== 'NONE') {
+        const layoutProps = [
+          'layoutMode',
+          'primaryAxisSizingMode',
+          'counterAxisSizingMode',
+          'primaryAxisAlignItems',
+          'counterAxisAlignItems',
+          'itemSpacing',
+          'paddingLeft',
+          'paddingRight',
+          'paddingTop',
+          'paddingBottom'
+        ];
+
+        for (const prop of layoutProps) {
+          try {
+            if (sourceNode[prop] !== undefined && targetNode[prop] !== undefined) {
+              targetNode[prop] = sourceNode[prop];
+              copiedProps.push({ property: prop, value: sourceNode[prop] });
+            }
+          } catch (err) {
+            copiedProps.push({ property: prop, error: err.message });
+          }
+        }
+      }
+
+      return { copiedProperties: copiedProps };
+    `);
+
+    copiedDirectProperties = directResult.result.copiedProperties;
+  }
+
+  // 3. Copy styles if requested
+  let copiedStyles = [];
+  if (includeTypes.includes('direct')) {
+    sendProgress({ status: 'Copying styles...' });
+
+    const stylesResult = await api.executeInFigma(`
+      const sourceId = "${sourceNodeId}";
+      const targetId = "${targetNodeId}";
+
+      const sourceNode = figma.getNodeById(sourceId);
+      const targetNode = figma.getNodeById(targetId);
+
+      if (!sourceNode) {
+        throw new Error("Source node not found: " + sourceId);
+      }
+
+      if (!targetNode) {
+        throw new Error("Target node not found: " + targetId);
+      }
+
+      const copiedStyles = [];
+
+      // Copy effect style
+      if (sourceNode.effectStyleId && sourceNode.effectStyleId !== '') {
+        try {
+          targetNode.effectStyleId = sourceNode.effectStyleId;
+          copiedStyles.push({ type: 'effect', styleId: sourceNode.effectStyleId });
+        } catch (err) {
+          copiedStyles.push({ type: 'effect', error: err.message });
+        }
+      }
+
+      // Copy fill style
+      if (sourceNode.fillStyleId && sourceNode.fillStyleId !== '') {
+        try {
+          targetNode.fillStyleId = sourceNode.fillStyleId;
+          copiedStyles.push({ type: 'fill', styleId: sourceNode.fillStyleId });
+        } catch (err) {
+          copiedStyles.push({ type: 'fill', error: err.message });
+        }
+      }
+
+      // Copy stroke style
+      if (sourceNode.strokeStyleId && sourceNode.strokeStyleId !== '') {
+        try {
+          targetNode.strokeStyleId = sourceNode.strokeStyleId;
+          copiedStyles.push({ type: 'stroke', styleId: sourceNode.strokeStyleId });
+        } catch (err) {
+          copiedStyles.push({ type: 'stroke', error: err.message });
+        }
+      }
+
+      // Copy fills directly (if not using fill style and not bound to variables)
+      if ((!sourceNode.fillStyleId || sourceNode.fillStyleId === '') &&
+          sourceNode.fills && sourceNode.fills.length > 0 &&
+          (!sourceNode.boundVariables || !sourceNode.boundVariables.fills)) {
+        try {
+          targetNode.fills = JSON.parse(JSON.stringify(sourceNode.fills));
+          copiedStyles.push({ type: 'fills', count: sourceNode.fills.length });
+        } catch (err) {
+          copiedStyles.push({ type: 'fills', error: err.message });
+        }
+      }
+
+      // Copy strokes directly (if not using stroke style and not bound to variables)
+      if ((!sourceNode.strokeStyleId || sourceNode.strokeStyleId === '') &&
+          sourceNode.strokes && sourceNode.strokes.length > 0 &&
+          (!sourceNode.boundVariables || !sourceNode.boundVariables.strokes)) {
+        try {
+          targetNode.strokes = JSON.parse(JSON.stringify(sourceNode.strokes));
+          copiedStyles.push({ type: 'strokes', count: sourceNode.strokes.length });
+        } catch (err) {
+          copiedStyles.push({ type: 'strokes', error: err.message });
+        }
+      }
+
+      // Copy text styles from child text nodes
+      function copyTextStylesRecursive(sourceParent, targetParent) {
+        const copiedTextStyles = [];
+
+        if (sourceParent.children && targetParent.children) {
+          const minLength = Math.min(sourceParent.children.length, targetParent.children.length);
+
+          for (let i = 0; i < minLength; i++) {
+            const sourceChild = sourceParent.children[i];
+            const targetChild = targetParent.children[i];
+
+            // Copy text style if source child is text node
+            if (sourceChild.type === 'TEXT' && targetChild.type === 'TEXT') {
+              if (sourceChild.textStyleId && sourceChild.textStyleId !== '') {
+                try {
+                  targetChild.textStyleId = sourceChild.textStyleId;
+                  copiedTextStyles.push({
+                    nodeId: targetChild.id,
+                    nodeName: targetChild.name,
+                    styleId: sourceChild.textStyleId
+                  });
+                } catch (err) {
+                  copiedTextStyles.push({
+                    nodeId: targetChild.id,
+                    error: err.message
+                  });
+                }
+              }
+            }
+
+            // Recurse into children
+            if (sourceChild.children && targetChild.children) {
+              copiedTextStyles.push(...copyTextStylesRecursive(sourceChild, targetChild));
+            }
+          }
+        }
+
+        return copiedTextStyles;
+      }
+
+      const textStyles = copyTextStylesRecursive(sourceNode, targetNode);
+      if (textStyles.length > 0) {
+        copiedStyles.push({ type: 'textStyles', styles: textStyles });
+      }
+
+      return { copiedStyles: copiedStyles };
+    `);
+
+    copiedStyles = stylesResult.result.copiedStyles;
+  }
+
+  sendProgress({ status: 'All properties copied successfully' });
+
+  return {
+    success: true,
+    sourceNodeId,
+    targetNodeId,
+    copiedBindings: copiedBindings,
+    copiedDirectProperties: copiedDirectProperties,
+    copiedStyles: copiedStyles,
+    totalBindingsCopied: copiedBindings ? copiedBindings.totalCopied : 0,
+    totalDirectPropertiesCopied: copiedDirectProperties.length,
+    totalStylesCopied: copiedStyles.length
+  };
+}
+
 module.exports = {
   create_component: createComponent,
   create_auto_layout: createAutoLayout,
@@ -2068,5 +2620,9 @@ module.exports = {
   import_image_from_url: importImageFromUrl,
   create_image_component: createImageComponent,
   batch_create_image_components: batchCreateImageComponents,
-  execute_figma_script: executeFigmaScript
+  execute_figma_script: executeFigmaScript,
+  set_nested_instance_exposure: setNestedInstanceExposure,
+  expose_nested_instance_by_path: exposeNestedInstanceByPath,
+  copy_bindings: copyBindings,
+  copy_all_properties: copyAllProperties
 };

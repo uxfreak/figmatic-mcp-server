@@ -111,13 +111,16 @@ async function getDesignSystem(api, args, sendProgress) {
 async function getScreenshot(api, args, sendProgress) {
   const { nodeId, scale = 2, format = 'PNG' } = args;
 
+  // Convert format to uppercase (Figma API requires uppercase)
+  const upperFormat = format.toUpperCase();
+
   sendProgress({ status: `Capturing screenshot of node ${nodeId}...` });
 
   // Use existing screenshot helper from lib
   const screenshot = api.createScreenshotHelper(api);
   const result = await screenshot.screenshotById(nodeId, {
     scale,
-    format
+    format: upperFormat
   });
 
   return result;
@@ -452,6 +455,169 @@ async function getComponentVariants(api, args, sendProgress) {
   return result.result;
 }
 
+/**
+ * Tool 8: get_nested_instance_tree
+ * Get complete hierarchy of nested instances with properties, exposed instances, and bindings
+ * Essential for understanding nested component relationships before manipulation
+ */
+async function getNestedInstanceTree(api, args, sendProgress) {
+  const { instanceId, depth = -1 } = args;
+
+  sendProgress({ status: `Building nested instance tree for ${instanceId}...` });
+
+  const result = await api.executeInFigma(`
+    const instanceId = "${instanceId}";
+    const maxDepth = ${depth};
+    const instance = figma.getNodeById(instanceId);
+
+    if (!instance) {
+      throw new Error("Instance not found: " + instanceId);
+    }
+
+    if (instance.type !== "INSTANCE") {
+      throw new Error("Node is not an instance. Found type: " + instance.type);
+    }
+
+    // Recursive function to build instance tree
+    function buildInstanceTree(node, currentDepth = 0) {
+      const tree = {
+        id: node.id,
+        name: node.name,
+        type: node.type
+      };
+
+      // Add main component info if instance
+      if (node.type === "INSTANCE" && node.mainComponent) {
+        tree.mainComponent = {
+          id: node.mainComponent.id,
+          name: node.mainComponent.name,
+          key: node.mainComponent.key
+        };
+      }
+
+      // Extract component properties (for instances)
+      if (node.type === "INSTANCE" && node.componentProperties) {
+        tree.properties = [];
+        Object.entries(node.componentProperties).forEach(([key, value]) => {
+          const propEntry = {
+            key: key,
+            value: value
+          };
+
+          // Determine property type from component definition
+          if (node.mainComponent && node.mainComponent.componentPropertyDefinitions) {
+            const propDef = node.mainComponent.componentPropertyDefinitions[key];
+            if (propDef) {
+              propEntry.type = propDef.type;
+
+              // For INSTANCE_SWAP, resolve to component name
+              if (propDef.type === "INSTANCE_SWAP" && typeof value === "string") {
+                const swappedComp = figma.getNodeById(value);
+                if (swappedComp) {
+                  propEntry.componentName = swappedComp.name;
+                }
+              }
+            }
+          }
+
+          tree.properties.push(propEntry);
+        });
+      }
+
+      // Extract exposed instances
+      if (node.type === "INSTANCE" && node.exposedInstances && node.exposedInstances.length > 0) {
+        tree.exposedInstances = node.exposedInstances.map(expInst => {
+          const expData = {
+            id: expInst.id,
+            name: expInst.name,
+            isExposed: true
+          };
+
+          // Get exposed instance properties
+          if (expInst.componentProperties) {
+            expData.properties = [];
+            Object.entries(expInst.componentProperties).forEach(([key, value]) => {
+              const propEntry = {
+                key: key,
+                value: value
+              };
+
+              // Determine property type
+              if (expInst.mainComponent && expInst.mainComponent.componentPropertyDefinitions) {
+                const propDef = expInst.mainComponent.componentPropertyDefinitions[key];
+                if (propDef) {
+                  propEntry.type = propDef.type;
+                }
+              }
+
+              expData.properties.push(propEntry);
+            });
+          }
+
+          return expData;
+        });
+      }
+
+      // Extract property bindings (componentPropertyReferences)
+      if (node.componentPropertyReferences) {
+        tree.propertyBindings = [];
+        Object.entries(node.componentPropertyReferences).forEach(([targetField, propertyKey]) => {
+          tree.propertyBindings.push({
+            targetField: targetField,
+            propertyKey: propertyKey
+          });
+        });
+      }
+
+      // Extract variable bindings
+      if (node.boundVariables) {
+        tree.variableBindings = [];
+        Object.entries(node.boundVariables).forEach(([field, binding]) => {
+          if (binding && binding.id) {
+            tree.variableBindings.push({
+              field: field,
+              variableId: binding.id
+            });
+          }
+        });
+      }
+
+      // Extract children (recursive traversal with depth limit)
+      if (node.children && node.children.length > 0 && (maxDepth === -1 || currentDepth < maxDepth)) {
+        tree.children = node.children.map(child => {
+          // For instances, recursively build tree
+          if (child.type === "INSTANCE") {
+            return buildInstanceTree(child, currentDepth + 1);
+          } else {
+            // For non-instances, just return basic info
+            return {
+              id: child.id,
+              name: child.name,
+              type: child.type
+            };
+          }
+        });
+      } else if (node.children && node.children.length > 0) {
+        // If depth limit reached, just list children without recursion
+        tree.childrenSummary = {
+          count: node.children.length,
+          types: node.children.map(c => ({ name: c.name, type: c.type, id: c.id }))
+        };
+      }
+
+      return tree;
+    }
+
+    const tree = buildInstanceTree(instance);
+
+    return tree;
+  `);
+
+  sendProgress({ status: 'Instance tree built successfully' });
+
+  return result.result;
+}
+
 module.exports = {
   get_design_system: getDesignSystem,
   get_screenshot: getScreenshot,
@@ -459,5 +625,6 @@ module.exports = {
   get_node_details: getNodeDetails,
   analyze_complete: analyzeComplete,
   get_components: getComponents,
-  get_component_variants: getComponentVariants
+  get_component_variants: getComponentVariants,
+  get_nested_instance_tree: getNestedInstanceTree
 };

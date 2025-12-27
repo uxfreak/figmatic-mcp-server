@@ -369,6 +369,26 @@ const getComponentVariants = {
   }
 };
 
+const getNestedInstanceTree = {
+  name: 'get_nested_instance_tree',
+  description: 'Get complete hierarchy of nested instances with properties, exposed instances, component relationships, and bindings. Essential for understanding nested component structures before manipulation. Returns property tree including component properties, exposed instances, property bindings, and variable bindings at each level.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instanceId: {
+        type: 'string',
+        description: 'Instance node ID to analyze (e.g., "184:5659")'
+      },
+      depth: {
+        type: 'number',
+        description: 'Maximum nesting depth to traverse (-1 for unlimited, 0 for current level only). Default: -1 (unlimited)',
+        default: -1
+      }
+    },
+    required: ['instanceId']
+  }
+};
+
 const modifyNode = {
   name: 'modify_node',
   description: 'Modify properties of an existing node including layout, appearance, and dimensions.',
@@ -1188,6 +1208,52 @@ const batchCreateImageComponents = {
   }
 };
 
+const setNestedInstanceExposure = {
+  name: 'set_nested_instance_exposure',
+  description: 'PRIMITIVE: Set isExposedInstance flag on a nested instance node. This makes the instance\'s properties accessible from its parent instance. Requires exact node ID (use get_nested_instance_tree to discover node IDs). Returns exposedInstanceId in format "I{parentId};{childId}" for use with set_instance_properties.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      nodeId: {
+        type: 'string',
+        description: 'Node ID of the nested instance to expose/hide (e.g., "184:5649")'
+      },
+      isExposed: {
+        type: 'boolean',
+        description: 'Set to true to expose instance, false to hide. Default: true',
+        default: true
+      }
+    },
+    required: ['nodeId']
+  }
+};
+
+const exposeNestedInstanceByPath = {
+  name: 'expose_nested_instance_by_path',
+  description: 'WORKFLOW: Navigate to a nested instance via path and expose it in one operation. Combines navigation, validation, and exposure for convenience. Use this when you know the instance name hierarchy but not the exact node ID. Returns exposedInstanceId for subsequent property modifications.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      parentInstanceId: {
+        type: 'string',
+        description: 'Starting node ID to navigate from. Can be a COMPONENT, COMPONENT_SET, or INSTANCE node (e.g., "184:5659"). Use component ID to expose instances in component definitions.'
+      },
+      childPath: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Array of child node names to navigate down. Example: ["Icon Container"] or ["Icon Container", "Icon"]. Each name must match exactly.',
+        minItems: 1
+      },
+      isExposed: {
+        type: 'boolean',
+        description: 'Set to true to expose instance, false to hide. Default: true',
+        default: true
+      }
+    },
+    required: ['parentInstanceId', 'childPath']
+  }
+};
+
 const executeFigmaScript = {
   name: 'execute_figma_script',
   description: 'Execute arbitrary Figma Plugin API code. Use this for custom operations, complex workflows, or when existing tools don\'t cover your needs. The script runs in the Figma plugin context with full API access.',
@@ -1207,6 +1273,62 @@ const executeFigmaScript = {
   }
 };
 
+const copyBindings = {
+  name: 'copy_bindings',
+  description: 'WORKFLOW: Copy property bindings from source node to target node. Supports variable bindings (fills, strokes, dimensions), text property bindings, and instance swap bindings. Use optional bindingTypes filter to copy specific types only. Reduces cognitive load for common "copy properties" pattern.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sourceNodeId: {
+        type: 'string',
+        description: 'Source node ID to copy bindings from (e.g., "184:5659")'
+      },
+      targetNodeId: {
+        type: 'string',
+        description: 'Target node ID to copy bindings to (e.g., "184:5670")'
+      },
+      bindingTypes: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['variables', 'text', 'instanceSwap']
+        },
+        description: 'Optional filter for binding types to copy. Options: "variables" (boundVariables), "text" (componentPropertyReferences for TEXT/BOOLEAN), "instanceSwap" (componentPropertyReferences for INSTANCE_SWAP). Defaults to all types if not specified.',
+        default: ['variables', 'text', 'instanceSwap']
+      }
+    },
+    required: ['sourceNodeId', 'targetNodeId']
+  }
+};
+
+const copyAllProperties = {
+  name: 'copy_all_properties',
+  description: 'WORKFLOW: Copy all properties from source node to target node. Includes property bindings (variable, text, instance swap) AND direct properties (opacity, visible, locked, layout properties). Comprehensive one-call replication for template-based component creation. Composes copy_bindings internally.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sourceNodeId: {
+        type: 'string',
+        description: 'Source node ID to copy all properties from (e.g., "184:5659")'
+      },
+      targetNodeId: {
+        type: 'string',
+        description: 'Target node ID to copy all properties to (e.g., "184:5670")'
+      },
+      includeTypes: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['bindings', 'direct']
+        },
+        description: 'Optional filter for property categories to copy. Options: "bindings" (all property bindings via copy_bindings), "direct" (opacity, visible, locked, layoutMode, padding, itemSpacing, etc.). Defaults to both if not specified.',
+        default: ['bindings', 'direct']
+      }
+    },
+    required: ['sourceNodeId', 'targetNodeId']
+  }
+};
+
 // Export all schemas
 
 function getAllSchemas() {
@@ -1219,6 +1341,7 @@ function getAllSchemas() {
     analyzeComplete,
     getComponents,
     getComponentVariants,
+    getNestedInstanceTree,
     getComponentProperties,
     getInstanceProperties,
     // WRITE tools
@@ -1251,6 +1374,12 @@ function getAllSchemas() {
     importImageFromUrl,
     createImageComponent,
     batchCreateImageComponents,
+    // NESTED INSTANCE tools
+    setNestedInstanceExposure,
+    exposeNestedInstanceByPath,
+    // PROPERTY COPY tools
+    copyBindings,
+    copyAllProperties,
     // UTILITY tools
     executeFigmaScript
   ];
@@ -1266,6 +1395,7 @@ module.exports = {
   analyzeComplete,
   getComponents,
   getComponentVariants,
+  getNestedInstanceTree,
   getComponentProperties,
   getInstanceProperties,
   createComponent,
@@ -1294,5 +1424,10 @@ module.exports = {
   reorderChildren,
   importImageFromUrl,
   createImageComponent,
-  batchCreateImageComponents
+  batchCreateImageComponents,
+  setNestedInstanceExposure,
+  exposeNestedInstanceByPath,
+  copyBindings,
+  copyAllProperties,
+  executeFigmaScript
 };
