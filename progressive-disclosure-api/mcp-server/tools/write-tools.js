@@ -696,6 +696,39 @@ async function modifyNode(api, args, sendProgress) {
     const properties = ${JSON.stringify(properties)};
     const modified = {};
 
+    // Validate gradient fills if present
+    if (properties.fills) {
+      const fills = properties.fills;
+
+      for (const fill of fills) {
+        // Validate gradient structure if gradient type
+        if (fill.type && fill.type.includes('GRADIENT')) {
+          // Validate gradientStops
+          if (!fill.gradientStops || !Array.isArray(fill.gradientStops)) {
+            throw new Error("Gradient fills require gradientStops array");
+          }
+
+          for (const stop of fill.gradientStops) {
+            if (!stop.color || typeof stop.position !== 'number') {
+              throw new Error("Each gradient stop must have color and position");
+            }
+            if (stop.position < 0 || stop.position > 1) {
+              throw new Error("Gradient stop position must be between 0 and 1");
+            }
+          }
+
+          // Validate gradientHandlePositions
+          if (!fill.gradientHandlePositions || !Array.isArray(fill.gradientHandlePositions)) {
+            throw new Error("Gradient fills require gradientHandlePositions array");
+          }
+
+          if (fill.gradientHandlePositions.length !== 3) {
+            throw new Error("gradientHandlePositions must have exactly 3 positions");
+          }
+        }
+      }
+    }
+
     // Apply each property
     for (const [key, value] of Object.entries(properties)) {
       try {
@@ -727,6 +760,156 @@ async function modifyNode(api, args, sendProgress) {
   sendProgress({ status: `Successfully modified ${Object.keys(properties).length} properties` });
 
   return result.result;
+}
+
+/**
+ * Modify multiple nodes in a single operation
+ * Batch workflow tool for efficient bulk node modifications
+ */
+async function batchModifyNodes(api, args, sendProgress) {
+  const { modifications } = args;
+
+  if (!modifications || !Array.isArray(modifications) || modifications.length === 0) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: modifications array'
+    };
+  }
+
+  // Validate each modification has nodeId and properties
+  for (let i = 0; i < modifications.length; i++) {
+    const mod = modifications[i];
+    if (!mod.nodeId || !mod.properties) {
+      throw {
+        code: -32602,
+        message: `Modification at index ${i} missing required fields: nodeId, properties`
+      };
+    }
+  }
+
+  sendProgress({ status: `Modifying ${modifications.length} nodes...` });
+
+  const result = await api.executeInFigma(`
+    const modifications = ${JSON.stringify(modifications)};
+
+    const results = [];
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const mod of modifications) {
+      try {
+        const node = figma.getNodeById(mod.nodeId);
+        if (!node) {
+          results.push({
+            nodeId: mod.nodeId,
+            success: false,
+            error: "Node not found"
+          });
+          errorCount++;
+          continue;
+        }
+
+        const properties = mod.properties;
+        const modified = {};
+
+        // Apply each property (reuse modify_node logic)
+        if (properties.fills !== undefined) {
+          node.fills = properties.fills;
+          modified.fills = true;
+        }
+
+        if (properties.strokes !== undefined) {
+          node.strokes = properties.strokes;
+          modified.strokes = true;
+        }
+
+        if (properties.opacity !== undefined) {
+          node.opacity = properties.opacity;
+          modified.opacity = true;
+        }
+
+        if (properties.visible !== undefined) {
+          node.visible = properties.visible;
+          modified.visible = true;
+        }
+
+        if (properties.locked !== undefined) {
+          node.locked = properties.locked;
+          modified.locked = true;
+        }
+
+        if (properties.cornerRadius !== undefined) {
+          if ('cornerRadius' in node) {
+            node.cornerRadius = properties.cornerRadius;
+            modified.cornerRadius = true;
+          }
+        }
+
+        if (properties.layoutMode !== undefined) {
+          if ('layoutMode' in node) {
+            node.layoutMode = properties.layoutMode;
+            modified.layoutMode = true;
+          }
+        }
+
+        if (properties.itemSpacing !== undefined) {
+          if ('itemSpacing' in node) {
+            node.itemSpacing = properties.itemSpacing;
+            modified.itemSpacing = true;
+          }
+        }
+
+        // Padding properties
+        if (properties.paddingLeft !== undefined && 'paddingLeft' in node) {
+          node.paddingLeft = properties.paddingLeft;
+          modified.paddingLeft = true;
+        }
+        if (properties.paddingRight !== undefined && 'paddingRight' in node) {
+          node.paddingRight = properties.paddingRight;
+          modified.paddingRight = true;
+        }
+        if (properties.paddingTop !== undefined && 'paddingTop' in node) {
+          node.paddingTop = properties.paddingTop;
+          modified.paddingTop = true;
+        }
+        if (properties.paddingBottom !== undefined && 'paddingBottom' in node) {
+          node.paddingBottom = properties.paddingBottom;
+          modified.paddingBottom = true;
+        }
+
+        results.push({
+          nodeId: mod.nodeId,
+          nodeName: node.name,
+          nodeType: node.type,
+          modified: modified,
+          success: true
+        });
+        successCount++;
+      } catch (err) {
+        results.push({
+          nodeId: mod.nodeId,
+          success: false,
+          error: err.message
+        });
+        errorCount++;
+      }
+    }
+
+    return {
+      success: true,
+      totalModifications: modifications.length,
+      successCount: successCount,
+      errorCount: errorCount,
+      results: results
+    };
+  `);
+
+  const resultData = result.result;
+  sendProgress({
+    status: `Modified ${resultData.successCount} of ${resultData.totalModifications} nodes (${resultData.errorCount} errors)`
+  });
+
+  return resultData;
 }
 
 /**
@@ -2868,6 +3051,7 @@ module.exports = {
   create_instance: createInstance,
   add_children: addChildren,
   modify_node: modifyNode,
+  batch_modify_nodes: batchModifyNodes,
   add_component_property: addComponentProperty,
   edit_component_property: editComponentProperty,
   delete_component_property: deleteComponentProperty,

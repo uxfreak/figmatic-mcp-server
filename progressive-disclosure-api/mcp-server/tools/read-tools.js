@@ -391,6 +391,113 @@ async function getComponents(api, args, sendProgress) {
 }
 
 /**
+ * Get comprehensive component metadata including properties, description, and location
+ * Enhanced workflow tool combining multiple data sources
+ */
+async function getComponentMetadata(api, args, sendProgress) {
+  const { componentId } = args;
+
+  if (!componentId) {
+    throw {
+      code: -32602,
+      message: 'Missing required parameter: componentId'
+    };
+  }
+
+  sendProgress({ status: `Getting metadata for component ${componentId}...` });
+
+  const result = await api.executeInFigma(`
+    const component = figma.getNodeById("${componentId}");
+    if (!component) {
+      throw new Error("Component not found: ${componentId}");
+    }
+
+    // Validate component type
+    if (component.type !== 'COMPONENT' && component.type !== 'COMPONENT_SET') {
+      throw new Error("Node is not a component. Type: " + component.type);
+    }
+
+    // Basic metadata
+    const metadata = {
+      id: component.id,
+      name: component.name,
+      type: component.type,
+      description: component.description || "",
+      dimensions: {
+        width: component.width,
+        height: component.height
+      }
+    };
+
+    // Parent information
+    if (component.parent) {
+      metadata.parent = {
+        type: component.parent.type,
+        name: component.parent.name,
+        id: component.parent.id
+      };
+    }
+
+    // Component properties (reuse existing logic)
+    if (component.type === 'COMPONENT') {
+      metadata.properties = {};
+      const propDefs = component.componentPropertyDefinitions;
+
+      if (propDefs) {
+        for (const [key, def] of Object.entries(propDefs)) {
+          metadata.properties[key] = {
+            type: def.type,
+            defaultValue: def.defaultValue
+          };
+
+          // Add preferred values for TEXT properties
+          if (def.type === 'TEXT' && def.preferredValues) {
+            metadata.properties[key].preferredValues = def.preferredValues;
+          }
+
+          // Add preferred values for INSTANCE_SWAP
+          if (def.type === 'INSTANCE_SWAP' && def.preferredValues) {
+            metadata.properties[key].preferredValues = def.preferredValues.map(v => v.id);
+          }
+        }
+      }
+
+      metadata.variantGroupProperties = null;
+    }
+
+    // ComponentSet-specific: variant group properties
+    if (component.type === 'COMPONENT_SET') {
+      metadata.variantGroupProperties = {};
+
+      // Extract variant properties from children
+      const variantProps = component.variantGroupProperties;
+      if (variantProps) {
+        for (const [propName, propValues] of Object.entries(variantProps)) {
+          metadata.variantGroupProperties[propName] = propValues.values || [];
+        }
+      }
+
+      // Also get component properties for the set
+      metadata.properties = {};
+      const propDefs = component.componentPropertyDefinitions;
+      if (propDefs) {
+        for (const [key, def] of Object.entries(propDefs)) {
+          metadata.properties[key] = {
+            type: def.type,
+            defaultValue: def.defaultValue
+          };
+        }
+      }
+    }
+
+    return metadata;
+  `);
+
+  sendProgress({ status: 'Component metadata retrieved successfully' });
+  return result.result;
+}
+
+/**
  * Tool 7: get_component_variants
  * Get all variants from a ComponentSet
  */
@@ -625,6 +732,7 @@ module.exports = {
   get_node_details: getNodeDetails,
   analyze_complete: analyzeComplete,
   get_components: getComponents,
+  get_component_metadata: getComponentMetadata,
   get_component_variants: getComponentVariants,
   get_nested_instance_tree: getNestedInstanceTree
 };

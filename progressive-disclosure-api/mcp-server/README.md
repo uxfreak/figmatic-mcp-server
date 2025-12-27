@@ -2,13 +2,13 @@
 
 **Production-ready MCP (Model Context Protocol) server for Figma design system analysis and automation.**
 
-Exposes 41 powerful tools that enable AI agents (Claude Desktop, ChatGPT, etc.) to read and manipulate Figma designs through a standardized MCP interface.
+Exposes 43 powerful tools that enable AI agents (Claude Desktop, ChatGPT, etc.) to read and manipulate Figma designs through a standardized MCP interface.
 
 ---
 
 ## Features
 
-✅ **41 MCP Tools** (8 READ + 32 WRITE + 1 UTILITY)
+✅ **43 MCP Tools** (9 READ + 33 WRITE + 1 UTILITY)
 ✅ **Progressive Disclosure API** - Layers 0-4 for incremental data loading
 ✅ **SSE Streaming** - Real-time progress updates
 ✅ **Layer 0 Caching** - 15-minute TTL for design system queries

@@ -407,6 +407,21 @@ const getComponents = {
   }
 };
 
+const getComponentMetadata = {
+  name: 'get_component_metadata',
+  description: 'WORKFLOW: Get comprehensive component metadata including properties, description, dimensions, parent location, and variant group properties (for ComponentSets). Enhanced discovery tool.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      componentId: {
+        type: 'string',
+        description: 'Component or ComponentSet ID'
+      }
+    },
+    required: ['componentId']
+  }
+};
+
 const getComponentVariants = {
   name: 'get_component_variants',
   description: 'Get all variants from a ComponentSet with their properties, IDs, and metadata. Use this to discover what variants exist before modifying or cloning them.',
@@ -458,7 +473,7 @@ const modifyNode = {
         properties: {
           fills: {
             type: 'array',
-            description: 'Fill colors (empty array for transparent)'
+            description: 'Fill paints (supports SOLID and GRADIENT types: GRADIENT_LINEAR, GRADIENT_RADIAL, GRADIENT_ANGULAR, GRADIENT_DIAMOND). For gradients, must include gradientStops and gradientHandlePositions. Empty array for transparent.'
           },
           strokes: {
             type: 'array',
@@ -519,6 +534,35 @@ const modifyNode = {
       }
     },
     required: ['nodeId', 'properties']
+  }
+};
+
+const batchModifyNodes = {
+  name: 'batch_modify_nodes',
+  description: 'WORKFLOW: Modify multiple nodes in a single operation. Reduces API calls by processing all modifications in one executeInFigma call. Use for bulk node property updates.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      modifications: {
+        type: 'array',
+        description: 'Array of modification specifications',
+        items: {
+          type: 'object',
+          properties: {
+            nodeId: {
+              type: 'string',
+              description: 'Node ID to modify'
+            },
+            properties: {
+              type: 'object',
+              description: 'Properties to modify (fills, strokes, opacity, visible, locked, cornerRadius, layoutMode, itemSpacing, padding, etc.)'
+            }
+          },
+          required: ['nodeId', 'properties']
+        }
+      }
+    },
+    required: ['modifications']
   }
 };
 
@@ -1416,6 +1460,7 @@ function getAllSchemas() {
     getNodeDetails,
     analyzeComplete,
     getComponents,
+    getComponentMetadata,
     getComponentVariants,
     getNestedInstanceTree,
     getComponentProperties,
@@ -1429,6 +1474,7 @@ function getAllSchemas() {
     createInstance,
     addChildren,
     modifyNode,
+    batchModifyNodes,
     swapComponent,
     renameNode,
     // COMPONENT PROPERTY tools
@@ -1472,6 +1518,7 @@ module.exports = {
   getNodeDetails,
   analyzeComplete,
   getComponents,
+  getComponentMetadata,
   getComponentVariants,
   getNestedInstanceTree,
   getComponentProperties,
@@ -1484,6 +1531,7 @@ module.exports = {
   createInstance,
   addChildren,
   modifyNode,
+  batchModifyNodes,
   swapComponent,
   renameNode,
   addComponentProperty,
