@@ -137,14 +137,17 @@ const createComponent = {
     properties: {
       name: {
         type: 'string',
+        default: 'New Component',
         description: 'Component name'
       },
       width: {
         type: 'number',
+        default: 100,
         description: 'Component width in pixels'
       },
       height: {
         type: 'number',
+        default: 100,
         description: 'Component height in pixels'
       },
       layoutMode: {
@@ -152,9 +155,17 @@ const createComponent = {
         enum: ['NONE', 'HORIZONTAL', 'VERTICAL'],
         default: 'NONE',
         description: 'Auto-layout mode'
+      },
+      fills: {
+        type: 'array',
+        description: 'Fill paints for the component'
+      },
+      cornerRadius: {
+        type: 'number',
+        default: 0,
+        description: 'Corner radius in pixels'
       }
-    },
-    required: ['name']
+    }
   }
 };
 
@@ -166,29 +177,63 @@ const createAutoLayout = {
     properties: {
       name: {
         type: 'string',
+        default: 'Auto Layout Frame',
         description: 'Frame name'
       },
-      direction: {
+      layoutMode: {
         type: 'string',
         enum: ['VERTICAL', 'HORIZONTAL'],
+        default: 'HORIZONTAL',
         description: 'Layout direction'
       },
       itemSpacing: {
         type: 'number',
-        default: 0,
+        default: 8,
         description: 'Spacing between children in pixels'
       },
       padding: {
         type: 'number',
-        default: 0,
+        default: 16,
         description: 'Padding on all sides in pixels'
       },
-      parentId: {
+      paddingLeft: {
+        type: 'number',
+        description: 'Left padding (overrides padding)'
+      },
+      paddingRight: {
+        type: 'number',
+        description: 'Right padding (overrides padding)'
+      },
+      paddingTop: {
+        type: 'number',
+        description: 'Top padding (overrides padding)'
+      },
+      paddingBottom: {
+        type: 'number',
+        description: 'Bottom padding (overrides padding)'
+      },
+      primaryAxisSizingMode: {
         type: 'string',
-        description: 'Optional parent node ID to append to'
+        enum: ['FIXED', 'AUTO'],
+        default: 'AUTO',
+        description: 'Primary axis sizing mode'
+      },
+      counterAxisSizingMode: {
+        type: 'string',
+        enum: ['FIXED', 'AUTO'],
+        default: 'AUTO',
+        description: 'Counter axis sizing mode'
+      },
+      fills: {
+        type: 'array',
+        description: 'Fill paints for the frame'
+      },
+      cornerRadius: {
+        type: 'number',
+        default: 0,
+        description: 'Corner radius in pixels'
       }
-    },
-    required: ['name', 'direction']
+    }
   }
 };
 
@@ -198,8 +243,9 @@ const createTextNode = {
   inputSchema: {
     type: 'object',
     properties: {
-      text: {
+      characters: {
         type: 'string',
+        default: 'Text',
         description: 'Text content'
       },
       textStyleName: {
@@ -208,15 +254,29 @@ const createTextNode = {
       },
       fontSize: {
         type: 'number',
+        default: 16,
         description: 'Font size in pixels if not using text style'
       },
       fontFamily: {
         type: 'string',
-        default: 'DM Sans',
+        default: 'Inter',
         description: 'Font family'
+      },
+      fontStyle: {
+        type: 'string',
+        default: 'Regular',
+        description: 'Font style (e.g., "Regular", "Bold", "Medium")'
+      },
+      textColor: {
+        type: 'object',
+        description: 'Text color as RGB object (e.g., { r: 0, g: 0, b: 0 })',
+        properties: {
+          r: { type: 'number', minimum: 0, maximum: 1 },
+          g: { type: 'number', minimum: 0, maximum: 1 },
+          b: { type: 'number', minimum: 0, maximum: 1 }
+        }
       }
-    },
-    required: ['text']
+    }
   }
 };
 
@@ -232,7 +292,8 @@ const bindVariable = {
       },
       property: {
         type: 'string',
-        enum: ['fills', 'strokes', 'width', 'height', 'cornerRadius', 'padding', 'itemSpacing'],
+        enum: ['fills', 'strokes', 'width', 'height', 'cornerRadius', 'padding', 'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'],
+        default: 'width',
         description: 'Property to bind'
       },
       variableName: {
@@ -240,7 +301,7 @@ const bindVariable = {
         description: 'Variable name (e.g., "Fills/card-background")'
       }
     },
-    required: ['nodeId', 'property', 'variableName']
+    required: ['nodeId', 'variableName']
   }
 };
 
@@ -279,25 +340,29 @@ const batchBindVariables = {
 
 const createInstance = {
   name: 'create_instance',
-  description: 'Create an instance of an existing component.',
+  description: 'Create an instance of an existing component. Provide either componentName or componentId.',
   inputSchema: {
     type: 'object',
     properties: {
       componentName: {
         type: 'string',
-        description: 'Name of component to instance'
+        description: 'Name of component to instance (searches local components)'
       },
-      parentId: {
+      componentId: {
         type: 'string',
-        description: 'Optional parent node ID to append to'
+        description: 'Component ID to instance (alternative to componentName, takes priority)'
       },
-      layoutAlign: {
-        type: 'string',
-        enum: ['INHERIT', 'STRETCH', 'MIN', 'CENTER', 'MAX'],
-        description: 'Layout alignment within parent'
+      x: {
+        type: 'number',
+        default: 0,
+        description: 'X position for the instance'
+      },
+      y: {
+        type: 'number',
+        default: 0,
+        description: 'Y position for the instance'
       }
-    },
-    required: ['componentName']
+    }
   }
 };
 
