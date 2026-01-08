@@ -5,6 +5,9 @@
  * Uses WebSocket server API and lib functions
  */
 
+const { normalizePaints, generateNormalizePaintCode } = require('../helpers/paint');
+const { generateFontLoadingCode } = require('../helpers/text');
+
 /**
  * Tool 1: create_component
  * Create a new Figma component with basic properties
@@ -21,6 +24,9 @@ async function createComponent(api, args, sendProgress) {
 
   sendProgress({ status: `Creating component "${name}"...` });
 
+  // Normalize fills (extract alpha from color.a to paint.opacity)
+  const normalizedFills = normalizePaints(fills);
+
   // Execute component creation script
   const result = await api.executeInFigma(`
     const component = figma.createComponent();
@@ -28,7 +34,7 @@ async function createComponent(api, args, sendProgress) {
     component.resize(${width}, ${height});
 
     // Set fills if provided
-    const fills = ${JSON.stringify(fills)};
+    const fills = ${JSON.stringify(normalizedFills)};
     if (fills.length > 0) {
       component.fills = fills;
     }
@@ -569,6 +575,9 @@ async function createAutoLayout(api, args, sendProgress) {
   const pTop = paddingTop !== undefined ? paddingTop : padding;
   const pBottom = paddingBottom !== undefined ? paddingBottom : padding;
 
+  // Normalize fills (extract alpha from color.a to paint.opacity)
+  const normalizedFills = normalizePaints(fills);
+
   const result = await api.executeInFigma(`
     const frame = figma.createFrame();
     frame.name = "${name}";
@@ -587,7 +596,7 @@ async function createAutoLayout(api, args, sendProgress) {
     frame.resize(${width}, ${height});
 
     // Set fills
-    const fills = ${JSON.stringify(fills)};
+    const fills = ${JSON.stringify(normalizedFills)};
     if (fills.length > 0) {
       frame.fills = fills;
     }
@@ -649,12 +658,15 @@ async function createTextNode(api, args, sendProgress) {
 
   sendProgress({ status: `Creating text node "${characters}"...` });
 
+  // Generate font loading code with normalization
+  const fontLoadingCode = generateFontLoadingCode(fontFamily, fontStyle);
+
   const result = await api.executeInFigma(`
-    // Load font FIRST before creating text node
-    await figma.loadFontAsync({ family: "${fontFamily}", style: "${fontStyle}" });
+    // Load font with normalization (tries multiple style variations)
+    ${fontLoadingCode}
 
     const text = figma.createText();
-    text.fontName = { family: "${fontFamily}", style: "${fontStyle}" };
+    text.fontName = loadedFont;
     text.fontSize = ${fontSize};
     text.characters = "${characters}";
 
@@ -1365,13 +1377,25 @@ async function addChildren(api, args, sendProgress) {
 
   sendProgress({ status: `Adding ${children.length} children to node ${parentId}...` });
 
+  // Normalize fills and strokes in all children (extract alpha from color.a to paint.opacity)
+  const normalizedChildren = children.map(child => {
+    const normalized = { ...child };
+    if (child.fills) {
+      normalized.fills = normalizePaints(child.fills);
+    }
+    if (child.strokes) {
+      normalized.strokes = normalizePaints(child.strokes);
+    }
+    return normalized;
+  });
+
   const result = await api.executeInFigma(`
     const parent = figma.getNodeById("${parentId}");
     if (!parent) {
       throw new Error("Parent node not found: ${parentId}");
     }
 
-    const children = ${JSON.stringify(children)};
+    const children = ${JSON.stringify(normalizedChildren)};
     const createdNodes = [];
 
     // Look up all variables once (performance optimization for bindings)
@@ -1417,11 +1441,48 @@ async function addChildren(api, args, sendProgress) {
               throw new Error(\`Text style not found or invalid: \${childSpec.textStyleId}\`);
             }
           } else {
-            // Use manual font specifications
+            // Use manual font specifications with normalization
             const fontFamily = childSpec.fontFamily || 'DM Sans';
             const fontStyle = childSpec.fontStyle || 'Regular';
-            await figma.loadFontAsync({ family: fontFamily, style: fontStyle });
-            child.fontName = { family: fontFamily, style: fontStyle };
+
+            // Load font with normalization - inlined code
+            const normalizeFontStyle = function(styleName) {
+              const standardStyles = {
+                'Thin': ['Thin', 'Hairline', 'Extra Thin'],
+                'ExtraLight': ['ExtraLight', 'Extra Light', 'Extralight', 'Ultra Light', 'UltraLight'],
+                'Light': ['Light'],
+                'Regular': ['Regular', 'Normal', 'Book'],
+                'Medium': ['Medium'],
+                'SemiBold': ['SemiBold', 'Semi Bold', 'Semibold', 'Medium', 'Demi Bold', 'DemiBold'],
+                'Bold': ['Bold'],
+                'ExtraBold': ['ExtraBold', 'Extra Bold', 'Extrabold', 'Black', 'Heavy', 'Ultra Bold', 'UltraBold'],
+                'Black': ['Black', 'Heavy', 'Extra Black', 'ExtraBlack', 'Ultra Black', 'UltraBlack']
+              };
+              for (const [standard, aliases] of Object.entries(standardStyles)) {
+                if (standard.toLowerCase() === styleName.toLowerCase()) return aliases;
+              }
+              return [styleName];
+            };
+
+            const stylesToTry = normalizeFontStyle(fontStyle);
+            let loadedFont = null;
+
+            for (const styleVariant of stylesToTry) {
+              try {
+                const fontName = { family: fontFamily, style: styleVariant };
+                await figma.loadFontAsync(fontName);
+                loadedFont = fontName;
+                break;
+              } catch (err) {
+                continue;
+              }
+            }
+
+            if (!loadedFont) {
+              throw new Error(\`Font "\${fontFamily}" does not have any of these styles: \${stylesToTry.join(', ')}. Please check available font styles in Figma.\`);
+            }
+
+            child.fontName = loadedFont;
             child.fontSize = childSpec.fontSize || 16;
             child.characters = childSpec.characters || '';
           }
@@ -1509,10 +1570,7 @@ async function addChildren(api, args, sendProgress) {
           if (childSpec.bottomLeftRadius !== undefined) child.bottomLeftRadius = childSpec.bottomLeftRadius;
           if (childSpec.bottomRightRadius !== undefined) child.bottomRightRadius = childSpec.bottomRightRadius;
 
-          // Layout sizing (responsive)
-          if (childSpec.layoutSizingHorizontal) child.layoutSizingHorizontal = childSpec.layoutSizingHorizontal;
-          if (childSpec.layoutSizingVertical) child.layoutSizingVertical = childSpec.layoutSizingVertical;
-          if (childSpec.layoutAlign) child.layoutAlign = childSpec.layoutAlign;
+          // Layout sizing will be applied AFTER appendChild (deferred)
 
           // Appearance
           if (childSpec.fills) {
@@ -1544,10 +1602,7 @@ async function addChildren(api, args, sendProgress) {
             child.cornerRadius = childSpec.cornerRadius;
           }
 
-          // Layout sizing (responsive)
-          if (childSpec.layoutSizingHorizontal) child.layoutSizingHorizontal = childSpec.layoutSizingHorizontal;
-          if (childSpec.layoutSizingVertical) child.layoutSizingVertical = childSpec.layoutSizingVertical;
-          if (childSpec.layoutAlign) child.layoutAlign = childSpec.layoutAlign;
+          // Layout sizing will be applied AFTER appendChild (deferred)
 
           // Appearance
           if (childSpec.fills) {
@@ -1666,8 +1721,40 @@ async function addChildren(api, args, sendProgress) {
               } else {
                 const fontFamily = nestedChildSpec.fontFamily || 'DM Sans';
                 const fontStyle = nestedChildSpec.fontStyle || 'Regular';
-                await figma.loadFontAsync({ family: fontFamily, style: fontStyle });
-                nestedChild.fontName = { family: fontFamily, style: fontStyle };
+
+                // Load font with normalization (same logic as parent text)
+                const normalizeFontStyle = function(styleName) {
+                  const standardStyles = {
+                    'SemiBold': ['SemiBold', 'Semi Bold', 'Semibold', 'Medium', 'Demi Bold', 'DemiBold'],
+                    'Bold': ['Bold'],
+                    'Medium': ['Medium'],
+                    'Regular': ['Regular', 'Normal', 'Book'],
+                    'ExtraBold': ['ExtraBold', 'Extra Bold', 'Extrabold', 'Black', 'Heavy']
+                  };
+                  for (const [standard, aliases] of Object.entries(standardStyles)) {
+                    if (standard.toLowerCase() === styleName.toLowerCase()) return aliases;
+                  }
+                  return [styleName];
+                };
+
+                const stylesToTry = normalizeFontStyle(fontStyle);
+                let loadedFont = null;
+                for (const styleVariant of stylesToTry) {
+                  try {
+                    const fontName = { family: fontFamily, style: styleVariant };
+                    await figma.loadFontAsync(fontName);
+                    loadedFont = fontName;
+                    break;
+                  } catch (err) {
+                    continue;
+                  }
+                }
+
+                if (!loadedFont) {
+                  throw new Error(\`Font "\${fontFamily}" does not have any of these styles: \${stylesToTry.join(', ')}\`);
+                }
+
+                nestedChild.fontName = loadedFont;
                 nestedChild.fontSize = nestedChildSpec.fontSize || 16;
                 nestedChild.characters = nestedChildSpec.characters || '';
               }
@@ -1734,9 +1821,7 @@ async function addChildren(api, args, sendProgress) {
               if (nestedChildSpec.bottomLeftRadius !== undefined) nestedChild.bottomLeftRadius = nestedChildSpec.bottomLeftRadius;
               if (nestedChildSpec.bottomRightRadius !== undefined) nestedChild.bottomRightRadius = nestedChildSpec.bottomRightRadius;
 
-              if (nestedChildSpec.layoutSizingHorizontal) nestedChild.layoutSizingHorizontal = nestedChildSpec.layoutSizingHorizontal;
-              if (nestedChildSpec.layoutSizingVertical) nestedChild.layoutSizingVertical = nestedChildSpec.layoutSizingVertical;
-              if (nestedChildSpec.layoutAlign) nestedChild.layoutAlign = nestedChildSpec.layoutAlign;
+              // Layout sizing will be applied AFTER appendChild (deferred)
 
               if (nestedChildSpec.fills) nestedChild.fills = nestedChildSpec.fills;
               if (nestedChildSpec.strokes) {
@@ -1761,9 +1846,7 @@ async function addChildren(api, args, sendProgress) {
 
               if (nestedChildSpec.cornerRadius !== undefined) nestedChild.cornerRadius = nestedChildSpec.cornerRadius;
 
-              if (nestedChildSpec.layoutSizingHorizontal) nestedChild.layoutSizingHorizontal = nestedChildSpec.layoutSizingHorizontal;
-              if (nestedChildSpec.layoutSizingVertical) nestedChild.layoutSizingVertical = nestedChildSpec.layoutSizingVertical;
-              if (nestedChildSpec.layoutAlign) nestedChild.layoutAlign = nestedChildSpec.layoutAlign;
+              // Layout sizing will be applied AFTER appendChild (deferred)
 
               if (nestedChildSpec.fills) nestedChild.fills = nestedChildSpec.fills;
               if (nestedChildSpec.strokes) {
@@ -1844,8 +1927,9 @@ async function addChildren(api, args, sendProgress) {
 
             child.appendChild(nestedChild);
 
-            // Apply layout sizing for text nodes (must be done AFTER appendChild)
-            if (nestedChild.type === 'TEXT' && (nestedChildSpec.layoutSizingHorizontal || nestedChildSpec.layoutSizingVertical || nestedChildSpec.layoutAlign)) {
+            // Apply layout sizing for ALL nested node types (must be done AFTER appendChild)
+            // This enables declarative layout sizing specification (Issue #27)
+            if (nestedChildSpec.layoutSizingHorizontal || nestedChildSpec.layoutSizingVertical || nestedChildSpec.layoutAlign) {
               try {
                 if (nestedChildSpec.layoutSizingHorizontal) {
                   nestedChild.layoutSizingHorizontal = nestedChildSpec.layoutSizingHorizontal;
@@ -1894,8 +1978,9 @@ async function addChildren(api, args, sendProgress) {
 
         parent.appendChild(child);
 
-        // Apply layout sizing for text nodes (must be done AFTER appendChild)
-        if (child.type === 'TEXT' && (childSpec.layoutSizingHorizontal || childSpec.layoutSizingVertical || childSpec.layoutAlign)) {
+        // Apply layout sizing for ALL node types (must be done AFTER appendChild)
+        // This enables declarative layout sizing specification (Issue #27)
+        if (childSpec.layoutSizingHorizontal || childSpec.layoutSizingVertical || childSpec.layoutAlign) {
           try {
             if (childSpec.layoutSizingHorizontal) {
               child.layoutSizingHorizontal = childSpec.layoutSizingHorizontal;
@@ -1947,7 +2032,16 @@ async function wrapInContainer(api, args, sendProgress) {
 
   sendProgress({ status: `Wrapping ${nodeIds.length} node(s) in container "${containerSpec.name}"...` });
 
-  const containerSpecJSON = JSON.stringify(containerSpec);
+  // Normalize fills and strokes in containerSpec (extract alpha from color.a to paint.opacity)
+  const normalizedContainerSpec = { ...containerSpec };
+  if (containerSpec.fills) {
+    normalizedContainerSpec.fills = normalizePaints(containerSpec.fills);
+  }
+  if (containerSpec.strokes) {
+    normalizedContainerSpec.strokes = normalizePaints(containerSpec.strokes);
+  }
+
+  const containerSpecJSON = JSON.stringify(normalizedContainerSpec);
   const nodeIdsJSON = JSON.stringify(nodeIds);
   const wrappedLayoutJSON = JSON.stringify(wrappedNodesLayout);
 
@@ -2167,13 +2261,22 @@ async function modifyNode(api, args, sendProgress) {
 
   sendProgress({ status: `Modifying node ${nodeId}...` });
 
+  // Normalize fills in properties (extract alpha from color.a to paint.opacity)
+  const normalizedProperties = { ...properties };
+  if (normalizedProperties.fills) {
+    normalizedProperties.fills = normalizePaints(normalizedProperties.fills);
+  }
+  if (normalizedProperties.strokes) {
+    normalizedProperties.strokes = normalizePaints(normalizedProperties.strokes);
+  }
+
   const result = await api.executeInFigma(`
     const node = figma.getNodeById("${nodeId}");
     if (!node) {
       throw new Error("Node not found: ${nodeId}");
     }
 
-    const properties = ${JSON.stringify(properties)};
+    const properties = ${JSON.stringify(normalizedProperties)};
     const modified = {};
 
     // Helper function to validate gradient paint
@@ -3352,13 +3455,16 @@ async function createTextStyle(api, args, sendProgress) {
 
   sendProgress({ status: `Creating text style "${name}"...` });
 
+  // Generate font loading code with normalization
+  const fontLoadingCode = generateFontLoadingCode(fontFamily, fontStyle);
+
   const result = await api.executeInFigma(`
-    // Load the font first
-    await figma.loadFontAsync({ family: "${fontFamily}", style: "${fontStyle}" });
+    // Load the font with normalization (tries multiple style variations)
+    ${fontLoadingCode}
 
     const textStyle = figma.createTextStyle();
     textStyle.name = "${name}";
-    textStyle.fontName = { family: "${fontFamily}", style: "${fontStyle}" };
+    textStyle.fontName = loadedFont;
     textStyle.fontSize = ${fontSize};
 
     ${lineHeight ? `
@@ -4664,12 +4770,34 @@ async function applyImageFill(api, args, sendProgress) {
  * Converts simple angle parameter to gradientTransform matrix
  */
 async function applyGradientFill(api, args, sendProgress) {
-  const { nodeId, gradientType = 'linear', angle = 90, colors, opacity = 1 } = args;
+  const { nodeId, gradientType = 'linear', angle = 90, colors, colorVariables, opacity = 1 } = args;
 
-  if (!nodeId || !colors || !Array.isArray(colors) || colors.length < 2) {
+  // Either colors OR colorVariables must be provided
+  if (!nodeId) {
     throw {
       code: -32602,
-      message: 'Missing required parameters: nodeId and colors array (minimum 2 colors)'
+      message: 'Missing required parameter: nodeId'
+    };
+  }
+
+  if (!colors && !colorVariables) {
+    throw {
+      code: -32602,
+      message: 'Either colors or colorVariables must be provided'
+    };
+  }
+
+  if (colors && (!Array.isArray(colors) || colors.length < 2)) {
+    throw {
+      code: -32602,
+      message: 'colors array must contain at least 2 colors'
+    };
+  }
+
+  if (colorVariables && (!Array.isArray(colorVariables) || colorVariables.length < 2)) {
+    throw {
+      code: -32602,
+      message: 'colorVariables array must contain at least 2 variable references'
     };
   }
 
@@ -4679,7 +4807,8 @@ async function applyGradientFill(api, args, sendProgress) {
     const nodeId = "${nodeId}";
     const gradientType = "${gradientType}";
     const angle = ${angle};
-    const colorsJson = ${JSON.stringify(colors)};
+    const colorsJson = ${colors ? JSON.stringify(colors) : 'null'};
+    const colorVariablesJson = ${colorVariables ? JSON.stringify(colorVariables) : 'null'};
     const opacity = ${opacity};
 
     const node = figma.getNodeById(nodeId);
@@ -4713,22 +4842,72 @@ async function applyGradientFill(api, args, sendProgress) {
       throw new Error("Invalid color format: " + colorInput);
     }
 
-    // Generate gradient stops with smart positioning
-    const gradientStops = colorsJson.map((colorSpec, index) => {
-      let color, position;
+    // Generate gradient stops - either from colors or colorVariables
+    let gradientStops;
 
-      if (typeof colorSpec === 'string') {
-        // Simple hex color - distribute evenly
-        color = parseColor(colorSpec);
-        position = index / (colorsJson.length - 1);
-      } else if (typeof colorSpec === 'object') {
-        // Object with color and optional position
-        color = parseColor(colorSpec.color);
-        position = colorSpec.position !== undefined ? colorSpec.position : index / (colorsJson.length - 1);
-      }
+    if (colorVariablesJson) {
+      // MODE: Variable binding
+      // Build gradient stops with variable bindings
+      gradientStops = await Promise.all(colorVariablesJson.map(async (varSpec, index) => {
+        let variableId, position;
 
-      return { color, position };
-    });
+        if (typeof varSpec === 'string') {
+          // Simple variable ID/name - distribute evenly
+          variableId = varSpec;
+          position = index / (colorVariablesJson.length - 1);
+        } else if (typeof varSpec === 'object') {
+          // Object with variableId and optional position
+          variableId = varSpec.variableId || varSpec.variable || varSpec.id;
+          position = varSpec.position !== undefined ? varSpec.position : index / (colorVariablesJson.length - 1);
+        }
+
+        // Find variable
+        let variable;
+        if (variableId.includes(':')) {
+          variable = figma.variables.getVariableById(variableId);
+        } else {
+          const variables = await figma.variables.getLocalVariablesAsync();
+          variable = variables.find(v => v.name === variableId);
+        }
+
+        if (!variable) {
+          throw new Error('Variable not found: ' + variableId);
+        }
+
+        if (variable.resolvedType !== 'COLOR') {
+          throw new Error('Variable must be COLOR type: ' + variableId);
+        }
+
+        // Return stop with variable binding
+        return {
+          position,
+          color: { r: 1, g: 1, b: 1, a: 1 }, // Placeholder - will be overridden by variable
+          boundVariables: {
+            color: {
+              type: 'VARIABLE_ALIAS',
+              id: variable.id
+            }
+          }
+        };
+      }));
+    } else {
+      // MODE: Static colors
+      gradientStops = colorsJson.map((colorSpec, index) => {
+        let color, position;
+
+        if (typeof colorSpec === 'string') {
+          // Simple hex color - distribute evenly
+          color = parseColor(colorSpec);
+          position = index / (colorsJson.length - 1);
+        } else if (typeof colorSpec === 'object') {
+          // Object with color and optional position
+          color = parseColor(colorSpec.color);
+          position = colorSpec.position !== undefined ? colorSpec.position : index / (colorsJson.length - 1);
+        }
+
+        return { color, position };
+      });
+    }
 
     // Generate gradientTransform based on type and angle
     let gradientTransform;
@@ -4779,13 +4958,217 @@ async function applyGradientFill(api, args, sendProgress) {
         type: gradientType,
         angle: gradientType === 'linear' ? angle : null,
         colorCount: gradientStops.length,
-        opacity: opacity
+        opacity: opacity,
+        variablesBound: colorVariablesJson ? true : false,
+        variableCount: colorVariablesJson ? colorVariablesJson.length : 0
       }
     };
   `);
 
   sendProgress({ status: 'Gradient fill applied successfully' });
   return result.result;
+}
+
+/**
+ * Tool: swap_instance_component
+ * Swap a top-level instance to a different component while preserving overrides
+ */
+async function swapInstanceComponent(api, args, sendProgress) {
+  const { instanceId, newComponentId } = args;
+
+  sendProgress({ status: `Swapping instance ${instanceId} to new component...` });
+
+  const result = await api.executeInFigma(`
+    const instance = figma.getNodeById("${instanceId}");
+    if (!instance) {
+      throw new Error("Instance not found with ID: ${instanceId}");
+    }
+
+    if (instance.type !== "INSTANCE") {
+      throw new Error("Node is not an instance. Found type: " + instance.type);
+    }
+
+    const newComponent = figma.getNodeById("${newComponentId}");
+    if (!newComponent) {
+      throw new Error("New component not found with ID: ${newComponentId}");
+    }
+
+    if (newComponent.type !== "COMPONENT" && newComponent.type !== "COMPONENT_SET") {
+      throw new Error("Target node is not a component. Found type: " + newComponent.type);
+    }
+
+    // Get original component info before swap
+    const originalComponent = instance.mainComponent;
+    const originalComponentId = originalComponent ? originalComponent.id : null;
+    const originalComponentName = originalComponent ? originalComponent.name : 'Unknown';
+
+    // Perform the swap using swapComponent() which preserves overrides
+    instance.swapComponent(newComponent);
+
+    return {
+      success: true,
+      instanceId: instance.id,
+      instanceName: instance.name,
+      originalComponent: {
+        id: originalComponentId,
+        name: originalComponentName
+      },
+      newComponent: {
+        id: newComponent.id,
+        name: newComponent.name,
+        type: newComponent.type
+      },
+      overridesPreserved: true
+    };
+  `);
+
+  sendProgress({ status: 'Instance swapped successfully with overrides preserved' });
+  return result.result;
+}
+
+/**
+ * Tool: batch_apply_images
+ * Apply images to multiple nodes efficiently in a single batch operation
+ */
+async function batchApplyImages(api, args, sendProgress) {
+  const { imageSpecs } = args;
+
+  if (!imageSpecs || !Array.isArray(imageSpecs) || imageSpecs.length === 0) {
+    throw new Error('imageSpecs must be a non-empty array');
+  }
+
+  sendProgress({ status: `Batch applying images to ${imageSpecs.length} nodes...` });
+
+  const result = await api.executeInFigma(`
+    const imageSpecs = ${JSON.stringify(imageSpecs)};
+    const results = [];
+    const errors = [];
+
+    // Step 1: Import all images in parallel
+    const imageImportPromises = imageSpecs.map(async (spec, index) => {
+      try {
+        const image = await figma.createImageAsync(spec.imageUrl);
+        return { index, image, spec };
+      } catch (error) {
+        errors.push({
+          index,
+          nodeId: spec.nodeId,
+          error: error.message
+        });
+        return { index, image: null, spec };
+      }
+    });
+
+    const importedImages = await Promise.all(imageImportPromises);
+
+    // Step 2: Apply images to nodes in parallel
+    const applyPromises = importedImages.map(async ({ index, image, spec }) => {
+      if (!image) {
+        return { success: false, index };
+      }
+
+      try {
+        const node = figma.getNodeById(spec.nodeId);
+        if (!node) {
+          errors.push({
+            index,
+            nodeId: spec.nodeId,
+            error: 'Node not found'
+          });
+          return { success: false, index };
+        }
+
+        // Validate node supports fills
+        if (!('fills' in node)) {
+          errors.push({
+            index,
+            nodeId: spec.nodeId,
+            error: 'Node does not support fills'
+          });
+          return { success: false, index };
+        }
+
+        // Parse scaleMode (default: FILL)
+        const scaleMode = spec.scaleMode || 'FILL';
+        const opacity = spec.opacity !== undefined ? spec.opacity : 1;
+
+        // Create image paint
+        const imagePaint = {
+          type: 'IMAGE',
+          scaleMode: scaleMode,
+          imageHash: image.hash,
+          opacity: opacity
+        };
+
+        // Apply optional transformations
+        if (spec.rotation !== undefined) {
+          const rotationRadians = (spec.rotation * Math.PI) / 180;
+          imagePaint.rotation = rotationRadians;
+        }
+
+        if (scaleMode === 'TILE' && spec.tileScale !== undefined) {
+          imagePaint.scalingFactor = spec.tileScale;
+        }
+
+        if (scaleMode === 'CROP' && spec.crop) {
+          imagePaint.imageTransform = [
+            [spec.crop.x, 0, 0],
+            [0, spec.crop.y, 0]
+          ];
+        }
+
+        // Apply filters if provided (nested in filters object)
+        if (spec.filters) {
+          imagePaint.filters = {};
+          if (spec.filters.exposure !== undefined) imagePaint.filters.exposure = spec.filters.exposure;
+          if (spec.filters.contrast !== undefined) imagePaint.filters.contrast = spec.filters.contrast;
+          if (spec.filters.saturation !== undefined) imagePaint.filters.saturation = spec.filters.saturation;
+          if (spec.filters.temperature !== undefined) imagePaint.filters.temperature = spec.filters.temperature;
+          if (spec.filters.tint !== undefined) imagePaint.filters.tint = spec.filters.tint;
+          if (spec.filters.highlights !== undefined) imagePaint.filters.highlights = spec.filters.highlights;
+          if (spec.filters.shadows !== undefined) imagePaint.filters.shadows = spec.filters.shadows;
+        }
+
+        // Apply fill
+        node.fills = [imagePaint];
+
+        results.push({
+          success: true,
+          index,
+          nodeId: spec.nodeId,
+          nodeName: node.name,
+          imageHash: image.hash,
+          scaleMode: scaleMode
+        });
+
+        return { success: true, index };
+      } catch (error) {
+        errors.push({
+          index,
+          nodeId: spec.nodeId,
+          error: error.message
+        });
+        return { success: false, index };
+      }
+    });
+
+    await Promise.all(applyPromises);
+
+    return {
+      totalRequested: imageSpecs.length,
+      successful: results.length,
+      failed: errors.length,
+      results: results,
+      errors: errors
+    };
+  `);
+
+  const summary = result.result;
+  sendProgress({
+    status: `Batch complete: ${summary.successful}/${summary.totalRequested} images applied successfully`
+  });
+
+  return summary;
 }
 
 module.exports = {
@@ -4831,5 +5214,7 @@ module.exports = {
   set_nested_instance_exposure: setNestedInstanceExposure,
   expose_nested_instance_by_path: exposeNestedInstanceByPath,
   copy_bindings: copyBindings,
-  copy_all_properties: copyAllProperties
+  copy_all_properties: copyAllProperties,
+  swap_instance_component: swapInstanceComponent,
+  batch_apply_images: batchApplyImages
 };

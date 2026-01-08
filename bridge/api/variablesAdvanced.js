@@ -337,19 +337,31 @@ async function unbindVariable(context, options = {}) {
 }
 
 /**
- * Bind a variable to a fill or stroke color
+ * Bind a variable to a fill or stroke color (solid or gradient stop)
  * @param {Object} context - Execution context
  * @param {Object} options - Binding options
  * @param {string} options.nodeId - Node ID
  * @param {number} options.paintIndex - Index in fills or strokes array (default: 0)
  * @param {string} options.variableId - Variable ID or name (must be COLOR type)
  * @param {boolean} options.isFill - true for fills, false for strokes (default: true)
+ * @param {number} [options.stopIndex] - Optional: gradient stop index (for gradient paints only)
  * @returns {Promise<Object>} Result { success: true, nodeId, variableId }
  *
  * @example
+ * // Bind to solid paint
  * bindVariableToPaint(context, {
  *   nodeId: 'rect-id',
  *   paintIndex: 0,
+ *   variableId: 'color-variable-id',
+ *   isFill: true
+ * })
+ *
+ * @example
+ * // Bind to gradient stop
+ * bindVariableToPaint(context, {
+ *   nodeId: 'rect-id',
+ *   paintIndex: 0,
+ *   stopIndex: 0,  // First gradient stop
  *   variableId: 'color-variable-id',
  *   isFill: true
  * })
@@ -359,7 +371,8 @@ async function bindVariableToPaint(context, options = {}) {
     nodeId,
     paintIndex = 0,
     variableId,
-    isFill = true
+    isFill = true,
+    stopIndex
   } = options;
 
   if (!nodeId || !variableId) {
@@ -406,13 +419,46 @@ async function bindVariableToPaint(context, options = {}) {
 
     // Clone paints array (immutable)
     const paintsCopy = [...paintsArray];
+    const paint = paintsCopy[paintIndex];
 
-    // Bind variable to paint
-    paintsCopy[paintIndex] = figma.variables.setBoundVariableForPaint(
-      paintsCopy[paintIndex],
-      'color',
-      variable
-    );
+    // Check if stopIndex is provided (for gradient binding)
+    const stopIndex = ${stopIndex !== undefined ? stopIndex : 'undefined'};
+
+    if (stopIndex !== undefined) {
+      // GRADIENT BINDING MODE
+      if (!paint.gradientStops || !Array.isArray(paint.gradientStops)) {
+        throw new Error('Paint at index ' + paintIndex + ' is not a gradient (no gradientStops)');
+      }
+
+      if (stopIndex < 0 || stopIndex >= paint.gradientStops.length) {
+        throw new Error('Stop index out of bounds: ' + stopIndex + ' (stops: ' + paint.gradientStops.length + ')');
+      }
+
+      // Clone the paint and gradient stops
+      const newGradientStops = [...paint.gradientStops];
+      const stop = { ...newGradientStops[stopIndex] };
+
+      // Add variable binding to this stop
+      stop.boundVariables = {
+        color: {
+          type: 'VARIABLE_ALIAS',
+          id: variable.id
+        }
+      };
+
+      newGradientStops[stopIndex] = stop;
+      paintsCopy[paintIndex] = {
+        ...paint,
+        gradientStops: newGradientStops
+      };
+    } else {
+      // SOLID PAINT BINDING MODE (original behavior)
+      paintsCopy[paintIndex] = figma.variables.setBoundVariableForPaint(
+        paintsCopy[paintIndex],
+        'color',
+        variable
+      );
+    }
 
     // Apply back to node
     if (isFill) {
@@ -427,7 +473,9 @@ async function bindVariableToPaint(context, options = {}) {
       variableId: variable.id,
       variableName: variable.name,
       paintType: isFill ? 'fill' : 'stroke',
-      paintIndex: paintIndex
+      paintIndex: paintIndex,
+      stopIndex: stopIndex !== undefined ? stopIndex : null,
+      isGradient: stopIndex !== undefined
     };
   `;
 

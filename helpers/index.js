@@ -41,6 +41,8 @@ const {
   createCardFrame
 } = require('./autolayout');
 const {
+  normalizeFontStyle,
+  generateFontLoadingCode,
   createTextWithStyle,
   createTextWithFont,
   updateText,
@@ -84,6 +86,21 @@ const {
 const {
   createScreenshotHelper
 } = require('./screenshot');
+const {
+  normalizeColor,
+  normalizePaint,
+  normalizePaints,
+  generateNormalizePaintCode
+} = require('./paint');
+const {
+  parseIconName,
+  fetchIconSvg,
+  detectIconType,
+  mapVariantToIconSet,
+  generateColorApplicationCode,
+  buildIconNameWithVariant,
+  calculateOptimalStrokeWidth
+} = require('./icons');
 
 module.exports = {
   // Script runner
@@ -119,6 +136,8 @@ module.exports = {
   createCardFrame,
 
   // Text
+  normalizeFontStyle,
+  generateFontLoadingCode,
   createTextWithStyle,
   createTextWithFont,
   updateText,
@@ -163,5 +182,20 @@ module.exports = {
   analyze,
 
   // Screenshots
-  createScreenshotHelper
+  createScreenshotHelper,
+
+  // Paint utilities
+  normalizeColor,
+  normalizePaint,
+  normalizePaints,
+  generateNormalizePaintCode,
+
+  // Icon utilities
+  parseIconName,
+  fetchIconSvg,
+  detectIconType,
+  mapVariantToIconSet,
+  generateColorApplicationCode,
+  buildIconNameWithVariant,
+  calculateOptimalStrokeWidth
 };

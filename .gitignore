@@ -7,6 +7,7 @@ package-lock.json
 npm-debug.log*
 tool-calls.jsonl
 *.jsonl
+debug-logs/
 
 # Environment variables
 .env

@@ -264,6 +264,54 @@ node ../tests/test-all-write-tools.js
 
 ---
 
+#### 12. `get_page_structure`
+**Purpose:** Get all top-level nodes on current page with optional children
+
+**Input:**
+```json
+{
+  "includeChildren": false
+}
+```
+
+**Output:**
+```json
+{
+  "pageName": "Page 1",
+  "pageId": "0:1",
+  "nodes": [
+    {
+      "id": "4:70",
+      "name": "Instagram Home",
+      "type": "FRAME",
+      "width": 375,
+      "height": 812,
+      "x": 0,
+      "y": 0,
+      "visible": true,
+      "locked": false,
+      "childCount": 6
+    }
+  ],
+  "totalNodes": 1
+}
+```
+
+**Use Cases:**
+- Quick page overview without needing nodeId
+- Discover components, frames, and sections on page
+- Page-level structure view (complements `get_component_structure`)
+
+**With Children:**
+```json
+{
+  "includeChildren": true
+}
+```
+Returns first-level children for each top-level node.
+
+---
+
 ### WRITE Tools (Component Creation & Modification)
 
 #### 1. `create_component`
@@ -368,6 +416,16 @@ node ../tests/test-all-write-tools.js
 }
 ```
 
+**Font Weight Support (NEW):**
+```json
+{
+  "characters": "Heading",
+  "fontFamily": "Inter",
+  "fontStyle": "SemiBold"
+}
+```
+Supports all UI weight names: `Thin`, `ExtraLight`, `Light`, `Regular`, `Medium`, `SemiBold`, `Bold`, `ExtraBold`, `Black`. Automatically tries variations (e.g., SemiBold → Semi Bold → Semibold → Medium) to find available font style.
+
 ---
 
 #### 4. `bind_variable`
@@ -400,6 +458,76 @@ node ../tests/test-all-write-tools.js
 - `cornerRadius` - Border radius
 - `padding`, `itemSpacing` - Layout spacing
 - `topLeftRadius`, `topRightRadius`, `bottomLeftRadius`, `bottomRightRadius` - Individual corners
+
+---
+
+#### 4.1. `apply_gradient_fill` (with Variable Binding)
+**Purpose:** Apply gradient fill with design token support (NEW: Issue #29)
+
+**Input (Static Colors):**
+```json
+{
+  "nodeId": "37:97",
+  "gradientType": "linear",
+  "angle": 90,
+  "colors": ["#FF6B35", "#4A90E2"]
+}
+```
+
+**Input (Variable Binding - NEW!):**
+```json
+{
+  "nodeId": "37:97",
+  "gradientType": "linear",
+  "angle": 90,
+  "colorVariables": [
+    "VariableID:33:117",
+    "VariableID:33:118"
+  ]
+}
+```
+
+**Advanced: Mix Variables and Positions:**
+```json
+{
+  "nodeId": "37:97",
+  "gradientType": "linear",
+  "angle": 45,
+  "colorVariables": [
+    { "variableId": "VariableID:33:117", "position": 0 },
+    { "variableId": "VariableID:33:118", "position": 0.3 },
+    { "variableId": "VariableID:33:119", "position": 1 }
+  ]
+}
+```
+
+**Output:**
+```json
+{
+  "success": true,
+  "nodeId": "37:97",
+  "nodeName": "Test Gradient with Variables",
+  "appliedGradient": {
+    "type": "linear",
+    "angle": 90,
+    "colorCount": 2,
+    "opacity": 1,
+    "variablesBound": true,
+    "variableCount": 2
+  }
+}
+```
+
+**Key Features:**
+- ✅ **Design Token Support**: Gradients update with Light/Dark mode
+- ✅ **All Gradient Types**: linear, radial, angular, diamond
+- ✅ **Custom Positions**: Control stop positions for complex gradients
+- ✅ **Backward Compatible**: Still supports static colors
+
+**Use Cases:**
+- Themed gradients that change with design system modes
+- Brand variations using color tokens
+- Accessible gradients controlled from design system
 
 ---
 
@@ -515,6 +643,8 @@ node ../tests/test-all-write-tools.js
 #### 6. `add_children`
 **Purpose:** Add children to a parent node (frame, component, etc.)
 
+**Supports declarative layout sizing** (Issue #27): Specify `layoutSizingHorizontal`, `layoutSizingVertical`, and `layoutAlign` properties upfront in child specs - they're automatically applied after parent attachment.
+
 **Input:**
 ```json
 {
@@ -524,12 +654,16 @@ node ../tests/test-all-write-tools.js
       "type": "frame",
       "name": "Content",
       "layoutMode": "VERTICAL",
-      "itemSpacing": 8
+      "itemSpacing": 8,
+      "layoutSizingHorizontal": "FILL",
+      "layoutSizingVertical": "HUG"
     },
     {
       "type": "text",
       "characters": "Button Text",
-      "fontSize": 16
+      "fontSize": 16,
+      "layoutSizingHorizontal": "FILL",
+      "layoutSizingVertical": "HUG"
     },
     {
       "type": "instance",
@@ -564,16 +698,17 @@ node ../tests/test-all-write-tools.js
   "properties": {
     "name": "Updated Name",
     "width": 200,
-    "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 0, "b": 0 } }],
+    "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 0, "b": 0, "a": 0.8 } }],
     "layoutMode": "HORIZONTAL",
     "itemSpacing": 12,
     "paddingTop": 16,
     "cornerRadius": 8,
-    "opacity": 0.5,
     "visible": true
   }
 }
 ```
+
+**Note:** Supports CSS-like alpha in color object (`a: 0.8`). Alpha is automatically extracted to `paint.opacity`.
 
 **Output:**
 ```json
@@ -615,6 +750,46 @@ node ../tests/test-all-write-tools.js
   "success": true
 }
 ```
+
+---
+
+#### 8.1. `swap_instance_component`
+**Purpose:** Swap a top-level instance to a different component while preserving overrides
+
+Unlike `swap_component` which handles nested instances, this tool swaps the instance itself. Uses `swapComponent()` method which preserves all component property overrides, variable bindings, and custom modifications.
+
+**Input:**
+```json
+{
+  "instanceId": "181:5645",
+  "newComponentId": "181:5700"
+}
+```
+
+**Output:**
+```json
+{
+  "success": true,
+  "instanceId": "181:5645",
+  "instanceName": "Button Instance",
+  "originalComponent": {
+    "id": "181:5600",
+    "name": "Button/Primary"
+  },
+  "newComponent": {
+    "id": "181:5700",
+    "name": "Button/Secondary",
+    "type": "COMPONENT"
+  },
+  "overridesPreserved": true
+}
+```
+
+**Use Cases:**
+- Swap an instance to a different variant of the same component
+- Replace an instance with a different component while keeping customizations
+- Batch instance replacement operations
+- Template switching with preserved content
 
 ---
 
@@ -1095,9 +1270,414 @@ node ../tests/test-all-write-tools.js
 
 ---
 
+#### 22.1. `batch_apply_images`
+**Purpose:** Apply images to multiple nodes efficiently in a single batch operation
+
+Imports all images in parallel using `Promise.all()`, then applies them to nodes. Reduces API calls by 75-95% compared to calling `apply_image_fill` multiple times. Returns detailed success/error report for each operation.
+
+**Input:**
+```json
+{
+  "imageSpecs": [
+    {
+      "nodeId": "229:19195",
+      "imageUrl": "https://example.com/image1.png",
+      "scaleMode": "FILL",
+      "opacity": 1
+    },
+    {
+      "nodeId": "229:19196",
+      "imageUrl": "https://example.com/image2.jpg",
+      "scaleMode": "FIT",
+      "opacity": 0.8,
+      "filters": {
+        "saturation": -0.5,
+        "contrast": 0.2
+      }
+    },
+    {
+      "nodeId": "229:19197",
+      "imageUrl": "https://example.com/pattern.png",
+      "scaleMode": "TILE",
+      "tileScale": 0.5
+    }
+  ]
+}
+```
+
+**Output:**
+```json
+{
+  "totalRequested": 3,
+  "successful": 3,
+  "failed": 0,
+  "results": [
+    {
+      "success": true,
+      "index": 0,
+      "nodeId": "229:19195",
+      "nodeName": "Rectangle 1",
+      "imageHash": "abc123...",
+      "scaleMode": "FILL"
+    },
+    {
+      "success": true,
+      "index": 1,
+      "nodeId": "229:19196",
+      "nodeName": "Rectangle 2",
+      "imageHash": "def456...",
+      "scaleMode": "FIT"
+    },
+    {
+      "success": true,
+      "index": 2,
+      "nodeId": "229:19197",
+      "nodeName": "Rectangle 3",
+      "imageHash": "ghi789...",
+      "scaleMode": "TILE"
+    }
+  ],
+  "errors": []
+}
+```
+
+**Features:**
+- **Parallel import** - All images imported simultaneously with `Promise.all()`
+- **Performance** - 75-95% API call reduction vs sequential operations
+- **Scale modes** - FILL, FIT, CROP, TILE with full configuration
+- **Filters** - Apply exposure, contrast, saturation, temperature, tint, highlights, shadows
+- **Error handling** - Individual operation errors don't stop batch, detailed error report
+- **Transformations** - Rotation (90° increments), tile scaling, crop positioning
+
+**Use Cases:**
+- Batch apply product images to catalog design
+- Fill multiple placeholders with illustrations
+- Apply pattern/texture to multiple backgrounds
+- Bulk image replacement in templates
+
+**Performance Example:**
+```
+Sequential (apply_image_fill × 10): ~10-15 seconds
+Batch (batch_apply_images × 10): ~1-2 seconds
+Improvement: 75-85% faster
+```
+
+---
+
+### ICON Tools
+
+#### 23. `search_icons`
+**Purpose:** Search for icons across all Iconify icon sets (200+ sets, 275k+ icons)
+
+**Input:**
+```json
+{
+  "query": "heart",
+  "limit": 64,
+  "prefix": "lucide"
+}
+```
+
+**Output:**
+```json
+{
+  "success": true,
+  "query": "heart",
+  "total": 156,
+  "icons": [
+    "lucide:heart",
+    "lucide:heart-crack",
+    "lucide:heart-handshake",
+    "lucide:heart-off",
+    "lucide:heart-pulse"
+  ],
+  "limit": 64,
+  "collections": {
+    "lucide": {
+      "name": "Lucide",
+      "author": "Lucide Contributors",
+      "total": 1500
+    }
+  },
+  "hasMore": true,
+  "examples": {
+    "description": "Example tool calls to create icons from search results:",
+    "toolCalls": [
+      {
+        "tool": "create_icon_component",
+        "parameters": {
+          "iconName": "lucide:heart",
+          "size": 24,
+          "color": "#000000"
+        }
+      }
+    ]
+  }
+}
+```
+
+**Parameters:**
+- **query** (required) - Search term (e.g., "heart", "arrow", "settings")
+- **limit** (optional) - Max results to return (default: 64, max: 999)
+- **prefix** (optional) - Restrict to specific icon set (e.g., "lucide", "heroicons")
+- **category** (optional) - Filter by category (e.g., "arrows", "social")
+
+**Features:**
+- **Cross-library search** - Search across 200+ icon sets simultaneously
+- **Fast results** - Instant search with intelligent ranking
+- **Example tool calls** - Returns ready-to-use create_icon_component parameters
+- **Collection metadata** - Includes info about each icon set in results
+- **Pagination support** - Use limit and hasMore to fetch additional results
+
+**Use Cases:**
+- Discover icons by keyword before creating components
+- Find alternatives across different icon libraries
+- Browse available icons for a specific concept
+- Explore icon sets and their coverage
+
+---
+
+#### 24. `create_icon_component`
+**Purpose:** Create a single icon component from any Iconify icon set (200+ sets, 275k+ icons)
+
+**Input:**
+```json
+{
+  "iconName": "lucide:heart",
+  "componentName": "Icon/Heart",
+  "size": 24,
+  "color": "#FF0000",
+  "variant": "outline"
+}
+```
+
+**Output:**
+```json
+{
+  "success": true,
+  "componentId": "43:150",
+  "componentName": "Icon/Heart",
+  "iconSet": "lucide",
+  "iconName": "heart",
+  "variant": "outline",
+  "size": 24,
+  "iconType": "stroke",
+  "colorApplied": true,
+  "svgUrl": "https://api.iconify.design/lucide:heart.svg"
+}
+```
+
+**Supported Icon Sets:**
+- **Lucide** (1,500+ icons) - `lucide:heart`, `lucide:star`, `lucide:bell`
+- **Heroicons** (450+ icons) - `heroicons:bell`, `heroicons:user`
+- **Phosphor** (7,488 icons, 6 variants) - `phosphor:heart`, `phosphor:star`
+- **Material Design** (10,000+ icons) - `material-symbols:favorite`, `material-symbols:settings`
+- **Tabler** (5,000+ icons) - `tabler:heart`, `tabler:star`
+- **200+ more icon sets** - Browse at https://icon-sets.iconify.design/
+
+**Features:**
+- **Automatic icon type detection** - Detects stroke/fill/duotone icons automatically
+- **Smart color application** - Applies color as stroke (outline) or fill (solid) based on icon type
+- **Design token support** - Use `colorVariable` to bind color to design tokens
+- **Variant support** - Outline, solid, filled, duotone, thin, light, regular, bold (varies by icon set)
+- **Size customization** - Any size in pixels (default: 24)
+- **Optical sizing** - Fixed stroke widths that don't scale (16-20px → 1px, 21-28px → 1.5px, 29px+ → 2px)
+- **Custom stroke width** - Override automatic optical sizing with `strokeWidth` parameter
+- **Proportional scaling** - Icons scale proportionally with locked aspect ratio
+
+**Examples:**
+
+```javascript
+// Simple outline icon
+{
+  "iconName": "lucide:heart",
+  "size": 24
+}
+
+// Filled icon with color
+{
+  "iconName": "phosphor:heart",
+  "variant": "filled",
+  "color": "#FF0000",
+  "size": 32
+}
+
+// Icon bound to design token
+{
+  "iconName": "heroicons:bell",
+  "componentName": "Icon/Notifications",
+  "colorVariable": "Colors/Primary",
+  "size": 20
+}
+
+// Duotone icon
+{
+  "iconName": "phosphor:heart",
+  "variant": "duotone",
+  "color": "#6366F1"
+}
+
+// Custom stroke width (override optical sizing)
+{
+  "iconName": "lucide:star",
+  "size": 24,
+  "strokeWidth": 3,  // Extra bold stroke
+  "color": "#FFD700"
+}
+```
+
+**Variant Support by Icon Set:**
+- **Lucide**: outline only
+- **Heroicons**: outline, solid
+- **Phosphor**: outline, thin, light, regular, bold, filled, duotone
+- **Material Design**: outline, filled
+- **Tabler**: outline, filled
+
+**Color Management:**
+- **Stroke icons** (outline) - Color applied to `strokes` property
+- **Fill icons** (solid/filled) - Color applied to `fills` property
+- **Duotone icons** - Color applied to multiple layers with opacity
+
+**Stroke Width & Scaling:**
+- **Optical sizing** - Stroke widths automatically calculated based on icon size following design system best practices:
+  - **Small icons (16-20px)**: 1px stroke for clarity
+  - **Medium icons (21-28px)**: 1.5px stroke for balance
+  - **Large icons (29px+)**: 2px stroke for presence
+- **Fixed stroke widths** - Strokes remain constant when resizing (industry standard)
+- **Custom override** - Use `strokeWidth` parameter to specify exact stroke weight
+- **Proportional scaling** - Icons scale proportionally with locked aspect ratio using SCALE constraints
+- **ComponentSet variants** - Create stroke weight variants (Thin/Medium/Bold) using `create_component_variants`
+
+---
+
+#### 25. `batch_create_icons`
+**Purpose:** Create multiple icon components in one operation, optionally as variants in a ComponentSet
+
+**Input:**
+```json
+{
+  "icons": [
+    { "iconName": "lucide:heart", "variant": "outline" },
+    { "iconName": "lucide:star", "variant": "outline" },
+    { "iconName": "lucide:bell", "variant": "outline" }
+  ],
+  "size": 24,
+  "baseColor": "#000000",
+  "createComponentSet": true,
+  "componentSetName": "Icons/Actions"
+}
+```
+
+**Output:**
+```json
+{
+  "success": true,
+  "totalRequested": 3,
+  "componentsCreated": 3,
+  "componentSetCreated": true,
+  "componentSetId": "43:160",
+  "components": [
+    { "id": "43:161", "name": "Type=heart, Variant=outline", "iconName": "lucide:heart", "iconType": "stroke", "size": 24 },
+    { "id": "43:162", "name": "Type=star, Variant=outline", "iconName": "lucide:star", "iconType": "stroke", "size": 24 },
+    { "id": "43:163", "name": "Type=bell, Variant=outline", "iconName": "lucide:bell", "iconType": "stroke", "size": 24 }
+  ],
+  "failedFetches": 0,
+  "errors": []
+}
+```
+
+**Features:**
+- **Parallel icon fetching** - All icons fetched simultaneously for performance
+- **ComponentSet creation** - Optionally combine icons as variants with auto-layout and blue border
+- **Individual customization** - Each icon can have custom size, color, variant, strokeWidth
+- **Mixed icon sets** - Can combine icons from different libraries
+- **Optical sizing** - Automatic stroke width calculation with `baseStrokeWidth` override
+- **Error handling** - Continues creating icons even if some fail, reports all errors
+
+**Examples:**
+
+```javascript
+// Create icon set with variants
+{
+  "icons": [
+    { "iconName": "phosphor:heart", "variant": "outline" },
+    { "iconName": "phosphor:heart", "variant": "filled" },
+    { "iconName": "phosphor:heart", "variant": "duotone" }
+  ],
+  "size": 24,
+  "baseColor": "#000000",
+  "createComponentSet": true,
+  "componentSetName": "Icons/Heart"
+}
+
+// Create multiple separate icons
+{
+  "icons": [
+    { "iconName": "lucide:save" },
+    { "iconName": "lucide:edit" },
+    { "iconName": "lucide:trash" },
+    { "iconName": "lucide:download" }
+  ],
+  "size": 20,
+  "baseColor": "#6366F1",
+  "createComponentSet": false
+}
+
+// Mixed icon sets with custom colors
+{
+  "icons": [
+    { "iconName": "lucide:heart", "color": "#FF0000" },
+    { "iconName": "heroicons:star", "color": "#FFD700" },
+    { "iconName": "phosphor:bell", "color": "#3B82F6" }
+  ],
+  "size": 24
+}
+
+// Icons bound to design tokens
+{
+  "icons": [
+    { "iconName": "lucide:home", "colorVariable": "Colors/Primary" },
+    { "iconName": "lucide:settings", "colorVariable": "Colors/Secondary" },
+    { "iconName": "lucide:user", "colorVariable": "Colors/Tertiary" }
+  ],
+  "size": 20,
+  "createComponentSet": true,
+  "componentSetName": "Icons/Navigation"
+}
+
+// Custom stroke widths with optical sizing override
+{
+  "icons": [
+    { "iconName": "lucide:heart", "strokeWidth": 1 },
+    { "iconName": "lucide:star", "strokeWidth": 2 },
+    { "iconName": "lucide:bell", "strokeWidth": 3 }
+  ],
+  "size": 24,
+  "baseColor": "#000000",
+  "createComponentSet": false
+}
+```
+
+**Use Cases:**
+- Create icon library for design system
+- Generate icon variants (outline + filled) as ComponentSet
+- Batch import icons from Figma community patterns
+- Build themed icon sets with design token bindings
+- Rapid prototyping with instant icon access
+
+**Performance:**
+```
+Creating 10 icons:
+Sequential (create_icon_component × 10): ~20-30 seconds
+Batch (batch_create_icons): ~3-5 seconds
+Improvement: 75-85% faster
+```
+
+---
+
 ### UTILITY Tools
 
-#### 23. `execute_figma_script`
+#### 26. `execute_figma_script`
 **Purpose:** Execute arbitrary Figma Plugin API code for custom operations and complex workflows
 
 **Input:**

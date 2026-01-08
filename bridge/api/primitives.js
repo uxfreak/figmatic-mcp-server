@@ -10,6 +10,7 @@
  */
 
 const { executeInFigma } = require('./execute');
+const { generateFontLoadingCode } = require('../../helpers/text');
 
 // ============================================
 // TEXT OPERATIONS
@@ -45,6 +46,9 @@ async function createText(context, options = {}) {
     lineHeight = null
   } = options;
 
+  // Generate font loading code with normalization
+  const fontLoadingCode = generateFontLoadingCode(font.family, font.style);
+
   const script = `
     const text = figma.createText();
 
@@ -55,15 +59,15 @@ async function createText(context, options = {}) {
     // CRITICAL: Load the default font first (text nodes default to Inter Regular)
     await figma.loadFontAsync(text.fontName);
 
-    // Then load the target font
-    await figma.loadFontAsync(${JSON.stringify(font)});
+    // Load the target font with normalization (tries multiple style variations)
+    ${fontLoadingCode}
 
     // Text content
     text.characters = ${JSON.stringify(characters)};
 
     // Text properties
     text.fontSize = ${fontSize};
-    text.fontName = ${JSON.stringify(font)};
+    text.fontName = loadedFont;  // Use the successfully loaded font
     text.textAlignHorizontal = ${JSON.stringify(textAlignHorizontal)};
     text.textAlignVertical = ${JSON.stringify(textAlignVertical)};
     text.textAutoResize = ${JSON.stringify(textAutoResize)};
@@ -84,7 +88,8 @@ async function createText(context, options = {}) {
       name: text.name,
       characters: text.characters,
       width: text.width,
-      height: text.height
+      height: text.height,
+      fontLoaded: loadedFont  // Return the font that was actually loaded
     };
   `;
 
@@ -106,19 +111,46 @@ async function createStyledText(context, segments, options = {}) {
     baseFontSize = 16
   } = options;
 
+  // Collect all unique fonts from base and segments
+  const uniqueFonts = new Set();
+  uniqueFonts.add(JSON.stringify(baseFont));
+  segments.forEach(s => {
+    if (s.fontName) {
+      uniqueFonts.add(JSON.stringify(s.fontName));
+    }
+  });
+
+  // Generate font loading code for each unique font
+  const fontLoadingCodeParts = [];
+  const fontMap = {};
+
+  Array.from(uniqueFonts).forEach((fontStr, index) => {
+    const font = JSON.parse(fontStr);
+    const varName = `loadedFont${index}`;
+    fontMap[fontStr] = varName;
+
+    const loadingCode = generateFontLoadingCode(font.family, font.style);
+    fontLoadingCodeParts.push(`
+    // Load font: ${font.family} ${font.style}
+    (async () => {
+      ${loadingCode}
+      return loadedFont;
+    })().then(font => { ${varName} = font; })`);
+  });
+
+  const baseFontVar = fontMap[JSON.stringify(baseFont)];
+
   const script = `
     const text = figma.createText();
     text.x = ${position.x};
     text.y = ${position.y};
 
-    // Load all unique fonts
-    const fonts = new Set();
-    fonts.add(JSON.stringify(${JSON.stringify(baseFont)}));
-    ${segments.map(s => s.fontName ? `fonts.add(JSON.stringify(${JSON.stringify(s.fontName)}));` : '').join('\n    ')}
+    // Load all unique fonts with normalization
+    let ${Object.values(fontMap).join(', ')};
 
-    for (const fontStr of fonts) {
-      await figma.loadFontAsync(JSON.parse(fontStr));
-    }
+    await Promise.all([
+      ${fontLoadingCodeParts.join(',\n      ')}
+    ]);
 
     // Build text content
     const fullText = ${JSON.stringify(segments.map(s => s.text).join(''))};
@@ -126,12 +158,15 @@ async function createStyledText(context, segments, options = {}) {
 
     // Apply base styling
     text.fontSize = ${baseFontSize};
-    text.fontName = ${JSON.stringify(baseFont)};
+    text.fontName = ${baseFontVar};
     text.textAlignHorizontal = ${JSON.stringify(textAlignHorizontal)};
 
     // Apply range-based styling
     let offset = 0;
     const segments = ${JSON.stringify(segments)};
+
+    // Font map for segment lookups
+    const segmentFontMap = ${JSON.stringify(fontMap)};
 
     for (const segment of segments) {
       const start = offset;
@@ -144,7 +179,9 @@ async function createStyledText(context, segments, options = {}) {
         text.setRangeFills(start, end, segment.fills);
       }
       if (segment.fontName) {
-        text.setRangeFontName(start, end, segment.fontName);
+        const fontKey = JSON.stringify(segment.fontName);
+        const loadedFontVar = segmentFontMap[fontKey];
+        text.setRangeFontName(start, end, eval(loadedFontVar));
       }
 
       offset = end;

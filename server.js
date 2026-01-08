@@ -1,224 +1,400 @@
+#!/usr/bin/env node
 /**
- * Figmatic MCP Server (Standalone)
+ * Figmatic MCP Server - Native Stdio Implementation
  *
- * Model Context Protocol server for Progressive Disclosure API
- * Exposes Figma design system analysis and automation as MCP tools
+ * World-class MCP server following industry best practices:
+ * - Native stdio transport (stdin/stdout communication)
+ * - Embedded WebSocket bridge for Figma Plugin API
+ * - Production-ready error handling
+ * - Proper logging to stderr (never stdout)
+ * - Graceful shutdown
  *
- * This is a STANDALONE package that bundles:
- *   - MCP Server (HTTP + SSE) on port 3000
- *   - WebSocket Bridge to Figma on port 8080
- *   - Figma Helper Functions (analysis, bindings, components, etc.)
+ * Protocol: MCP v2024-11-05 (stdio transport)
+ * Architecture:
+ *   - Stdin: JSON-RPC requests from Claude Code
+ *   - Stdout: JSON-RPC responses to Claude Code
+ *   - Stderr: Server logs and diagnostics
+ *   - Port 8080: WebSocket bridge to Figma Plugin
  *
- * Protocol: MCP v2024-11-05 (SSE transport)
- * Ports: 3000 (MCP) + 8080 (WebSocket Bridge)
- *
- * Usage:
- *   cd progressive-disclosure-api/mcp-server
- *   npm install
- *   npm start
- *
- * Prerequisites:
- *   - Figma Desktop with "AI Agent Bridge" plugin active
- *   - Plugin configured to connect to ws://localhost:8080
+ * This follows the exact same pattern as official MCP servers:
+ *   @modelcontextprotocol/server-github
+ *   @modelcontextprotocol/server-postgres
+ *   @modelcontextprotocol/server-filesystem
  */
 
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const { handleInitialize } = require('./handlers/initialize');
-const { handleToolsList } = require('./handlers/tools-list');
-const { handleToolsCall } = require('./handlers/tools-call');
+const { getToolCatalog, executeTool } = require('./tools');
+const { createAPIContext } = require('./utils/context');
+const { logToolCall } = require('./utils/logger');
 
-// Import and start local WebSocket bridge (bundled standalone)
+// Start embedded WebSocket bridge
 const wsServer = require('./bridge/server.js');
 
-const app = express();
-app.use(express.json());
+// Server state
+let initialized = false;
+let clientInfo = null;
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  const { createAPIContext } = require('./utils/context');
-  const { getLogStats } = require('./utils/logger');
-  const api = createAPIContext();
+/**
+ * Log to stderr (never stdout - that's reserved for JSON-RPC)
+ */
+function log(message, level = 'info') {
+  const timestamp = new Date().toISOString();
+  const prefix = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : 'ℹ️';
+  process.stderr.write(`[${timestamp}] ${prefix} ${message}\n`);
+}
 
-  res.json({
-    status: 'ok',
-    server: 'figmatic-mcp-server',
-    version: '1.0.0',
-    protocol: 'MCP v2024-11-05',
-    figmaConnected: api.isConnected ? api.isConnected() : false,
-    logging: getLogStats()
-  });
-});
+/**
+ * Send JSON-RPC response to stdout
+ */
+function sendResponse(id, result) {
+  const response = {
+    jsonrpc: '2.0',
+    id,
+    result
+  };
+  process.stdout.write(JSON.stringify(response) + '\n');
+}
 
-// Logs endpoint - view logging statistics
-app.get('/logs', (req, res) => {
-  const { getLogStats, getLogFilePath } = require('./utils/logger');
-  const stats = getLogStats();
-
-  res.json({
-    ...stats,
-    instructions: {
-      view: `cat ${getLogFilePath()}`,
-      tail: `tail -f ${getLogFilePath()}`,
-      parse: `cat ${getLogFilePath()} | jq '.'`
+/**
+ * Send JSON-RPC error to stdout
+ */
+function sendError(id, code, message, data = undefined) {
+  const response = {
+    jsonrpc: '2.0',
+    id,
+    error: {
+      code,
+      message,
+      ...(data && { data })
     }
-  });
-});
+  };
+  process.stdout.write(JSON.stringify(response) + '\n');
+}
 
-// Dashboard - live monitoring UI
-app.get('/dashboard', (req, res) => {
-  const dashboardPath = path.join(__dirname, 'dashboard.html');
-  res.sendFile(dashboardPath);
-});
+/**
+ * Handle initialize request
+ */
+function handleInitialize(id, params) {
+  const { protocolVersion, capabilities, clientInfo: client } = params || {};
 
-// Stream logs via Server-Sent Events
-app.get('/logs/stream', (req, res) => {
-  const { getLogFilePath } = require('./utils/logger');
-  const logPath = getLogFilePath();
+  // Support multiple protocol versions (backward compatible)
+  const supportedVersions = ['2024-11-05', '2025-11-25'];
 
-  // Set up SSE
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  // Send heartbeat every 30 seconds
-  const heartbeat = setInterval(() => {
-    res.write(': heartbeat\n\n');
-  }, 30000);
-
-  // Watch log file for changes
-  let lastSize = 0;
-  try {
-    const stats = fs.statSync(logPath);
-    lastSize = stats.size;
-  } catch (error) {
-    // File doesn't exist yet
-  }
-
-  const watcher = fs.watch(logPath, (eventType) => {
-    if (eventType === 'change') {
-      try {
-        const stats = fs.statSync(logPath);
-        if (stats.size > lastSize) {
-          // Read new content
-          const stream = fs.createReadStream(logPath, {
-            start: lastSize,
-            encoding: 'utf8'
-          });
-
-          stream.on('data', (chunk) => {
-            const lines = chunk.split('\n').filter(l => l.trim());
-            lines.forEach(line => {
-              try {
-                const logEntry = JSON.parse(line);
-                res.write(`data: ${JSON.stringify(logEntry)}\n\n`);
-              } catch (e) {
-                // Skip invalid JSON
-              }
-            });
-          });
-
-          lastSize = stats.size;
-        }
-      } catch (error) {
-        // Handle error silently
-      }
-    }
-  });
-
-  // Clean up on client disconnect
-  req.on('close', () => {
-    clearInterval(heartbeat);
-    watcher.close();
-  });
-});
-
-// Main MCP endpoint
-app.post('/mcp', async (req, res) => {
-  const { method, params, id } = req.body;
-
-  // Validate JSON-RPC 2.0 format
-  if (!method || !id) {
-    return res.status(400).json({
-      jsonrpc: '2.0',
-      id: id || null,
-      error: {
-        code: -32600,
-        message: 'Invalid Request - missing method or id'
-      }
-    });
-  }
-
-  try {
-    switch (method) {
-      case 'initialize':
-        return handleInitialize(req, res, params);
-
-      case 'tools/list':
-        return handleToolsList(req, res);
-
-      case 'tools/call':
-        return handleToolsCall(req, res, params);
-
-      default:
-        res.status(400).json({
-          jsonrpc: '2.0',
-          id,
-          error: {
-            code: -32601,
-            message: `Method not found: ${method}`
-          }
-        });
-    }
-  } catch (error) {
-    res.status(500).json({
-      jsonrpc: '2.0',
+  if (!supportedVersions.includes(protocolVersion)) {
+    sendError(
       id,
-      error: {
-        code: -32603,
-        message: 'Internal error',
-        data: { error: error.message }
-      }
-    });
+      -32602,
+      `Unsupported protocol version: ${protocolVersion}. Server supports: ${supportedVersions.join(', ')}`
+    );
+    return;
   }
+
+  initialized = true;
+  clientInfo = client;
+
+  log(`Initialized by ${client?.name || 'unknown'} v${client?.version || 'unknown'}`);
+  log(`Protocol version: ${protocolVersion}`);
+
+  sendResponse(id, {
+    protocolVersion: protocolVersion, // Echo back the client's version
+    capabilities: {
+      tools: {} // Server provides tools
+    },
+    serverInfo: {
+      name: 'figmatic-mcp-server',
+      version: '1.0.0',
+      description: 'Figma AI Agent Bridge - Progressive Disclosure API for design system automation'
+    }
+  });
+}
+
+/**
+ * Handle tools/list request
+ */
+function handleToolsList(id) {
+  const tools = getToolCatalog();
+
+  log(`Listing ${tools.length} available tools`);
+
+  sendResponse(id, {
+    tools: tools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema
+    }))
+  });
+}
+
+/**
+ * Handle tools/call request
+ */
+async function handleToolsCall(id, params) {
+  const { name, arguments: args } = params || {};
+  const startTime = Date.now();
+
+  // Validate required parameter
+  if (!name) {
+    sendError(id, -32602, 'Missing required parameter: name');
+    return;
+  }
+
+  log(`Executing tool: ${name}`);
+
+  // Log tool call start
+  logToolCall({
+    requestId: id,
+    toolName: name,
+    arguments: args,
+    status: 'started'
+  });
+
+  try {
+    // Create API context
+    const api = createAPIContext();
+
+    // Check Figma connection
+    if (!api.isConnected || !api.isConnected()) {
+      const duration = Date.now() - startTime;
+
+      logToolCall({
+        requestId: id,
+        toolName: name,
+        arguments: args,
+        status: 'error',
+        error: {
+          code: -32001,
+          message: 'Figma plugin not connected'
+        },
+        duration
+      });
+
+      sendError(
+        id,
+        -32001,
+        'Figma plugin not connected. Please open Figma Desktop and run the "AI Agent Bridge" plugin.',
+        { hint: 'Start the Figma plugin first, then retry this tool call' }
+      );
+      return;
+    }
+
+    // Progress callback (for future streaming support)
+    const sendProgress = (data) => {
+      log(`Progress: ${JSON.stringify(data)}`);
+    };
+
+    // Execute tool
+    const result = await executeTool(name, args, sendProgress, api);
+    const duration = Date.now() - startTime;
+
+    // Log success
+    logToolCall({
+      requestId: id,
+      toolName: name,
+      arguments: args,
+      status: 'success',
+      result,
+      duration
+    });
+
+    log(`Tool ${name} completed in ${duration}ms`);
+
+    // Send result
+    sendResponse(id, {
+      content: [
+        {
+          type: 'text',
+          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+        }
+      ],
+      isError: false
+    });
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+
+    // Log error
+    logToolCall({
+      requestId: id,
+      toolName: name,
+      arguments: args,
+      status: 'error',
+      error: {
+        code: error.code || -32000,
+        message: error.message || 'Tool execution failed',
+        stack: error.stack
+      },
+      duration
+    });
+
+    log(`Tool ${name} failed: ${error.message}`, 'error');
+
+    sendError(
+      id,
+      error.code || -32000,
+      error.message || 'Tool execution failed',
+      error.stack ? { stack: error.stack } : undefined
+    );
+  }
+}
+
+/**
+ * Process a JSON-RPC request
+ */
+async function processRequest(request) {
+  const { method, params, id } = request;
+
+  // Validate JSON-RPC format
+  if (!method || id === undefined) {
+    sendError(null, -32600, 'Invalid Request - missing method or id');
+    return;
+  }
+
+  // Route to handler
+  switch (method) {
+    case 'initialize':
+      handleInitialize(id, params);
+      break;
+
+    case 'tools/list':
+      handleToolsList(id);
+      break;
+
+    case 'tools/call':
+      await handleToolsCall(id, params);
+      break;
+
+    case 'ping':
+      // Health check
+      sendResponse(id, { status: 'ok' });
+      break;
+
+    default:
+      sendError(id, -32601, `Method not found: ${method}`);
+  }
+}
+
+/**
+ * Main stdin processor
+ */
+function startStdioServer() {
+  let buffer = '';
+
+  process.stdin.setEncoding('utf8');
+
+  process.stdin.on('data', async (chunk) => {
+    buffer += chunk;
+
+    // Process complete JSON-RPC messages (newline-delimited)
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+
+      try {
+        const request = JSON.parse(line);
+        await processRequest(request);
+      } catch (error) {
+        log(`Failed to parse request: ${error.message}`, 'error');
+        sendError(null, -32700, 'Parse error', { details: error.message });
+      }
+    }
+  });
+
+  process.stdin.on('end', () => {
+    log('Stdin closed, shutting down gracefully');
+    cleanup();
+    process.exit(0);
+  });
+
+  process.stdin.on('error', (error) => {
+    log(`Stdin error: ${error.message}`, 'error');
+    cleanup();
+    process.exit(1);
+  });
+}
+
+/**
+ * Cleanup on shutdown
+ */
+function cleanup() {
+  log('Shutting down MCP server');
+  // WebSocket server cleanup is handled by its own process handlers
+}
+
+/**
+ * Graceful shutdown handlers
+ */
+process.on('SIGTERM', () => {
+  log('Received SIGTERM, shutting down gracefully');
+  cleanup();
+  process.exit(0);
 });
 
-// Start WebSocket server first (port 8080)
-console.log('Starting WebSocket server...');
-wsServer.startServer();
-
-// Start MCP server (port 3000)
-const PORT = process.env.MCP_PORT || 3000;
-app.listen(PORT, () => {
-  // Dynamically count tools
-  const { countAndCategorizeTools } = require('./scripts/count-tools');
-  const toolCounts = countAndCategorizeTools();
-
-  console.log('');
-  console.log('╔════════════════════════════════════════╗');
-  console.log('║   Figmatic MCP Server (2024-11-05)    ║');
-  console.log('╚════════════════════════════════════════╝');
-  console.log('');
-  console.log(`✅ WebSocket Bridge: ws://localhost:8080`);
-  console.log(`✅ MCP Server: http://localhost:${PORT}`);
-  console.log('');
-  console.log(`Protocol: MCP v2024-11-05 (SSE transport)`);
-  console.log(`Endpoint: POST /mcp`);
-  console.log(`Health: GET /health`);
-  console.log(`Dashboard: GET /dashboard`);
-  console.log(`Logs: GET /logs`);
-  console.log('');
-  console.log('📝 Logging: ENABLED (tool-calls.jsonl)');
-  console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard`);
-  console.log('');
-  console.log(`📋 Tools Available: ${toolCounts.total} (${toolCounts.read} READ + ${toolCounts.write} WRITE)`);
-  console.log('');
-  console.log('⚠️  Prerequisites:');
-  console.log('   - Figma Desktop with "AI Agent Bridge" plugin active');
-  console.log('');
-  console.log('✅ MCP Server ready for tool calls');
-  console.log('');
+process.on('SIGINT', () => {
+  log('Received SIGINT, shutting down gracefully');
+  cleanup();
+  process.exit(0);
 });
 
-module.exports = { app };
+process.on('uncaughtException', (error) => {
+  log(`Uncaught exception: ${error.message}`, 'error');
+  log(error.stack, 'error');
+  cleanup();
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  log(`Unhandled rejection at ${promise}: ${reason}`, 'error');
+  cleanup();
+  process.exit(1);
+});
+
+/**
+ * Startup
+ */
+(async () => {
+  try {
+    // Startup banner (to stderr)
+    log('╔════════════════════════════════════════╗');
+    log('║   Figmatic MCP Server (2024-11-05)    ║');
+    log('╚════════════════════════════════════════╝');
+    log('');
+    log('Transport: Native stdio (industry standard)');
+
+    // Get configured WebSocket port
+    const wsPort = parseInt(process.env.FIGMA_WS_PORT || '8080', 10);
+    log(`WebSocket Bridge: Starting on port ${wsPort}...`);
+
+    // Start WebSocket bridge for Figma communication
+    wsServer.startServer();
+
+    log(`WebSocket Bridge: ✅ Running on ws://localhost:${wsPort}`);
+    log('');
+
+    // Count available tools
+    const { countAndCategorizeTools } = require('./scripts/count-tools');
+    const toolCounts = countAndCategorizeTools();
+    log(`Tools Available: ${toolCounts.total} (${toolCounts.read} READ + ${toolCounts.write} WRITE)`);
+    log('');
+    log('Prerequisites:');
+    log('  - Figma Desktop with "AI Agent Bridge" plugin active');
+    log(`  - Plugin configured to connect to ws://localhost:${wsPort}`);
+    log('');
+    if (wsPort !== 8080) {
+      log(`⚙️  Using custom port: ${wsPort} (set via FIGMA_WS_PORT)`);
+      log('');
+    }
+    log('MCP Server ready - waiting for stdin...');
+    log('');
+
+    // Start stdio processor
+    startStdioServer();
+
+  } catch (error) {
+    log(`Failed to start server: ${error.message}`, 'error');
+    log(error.stack, 'error');
+    process.exit(1);
+  }
+})();
+
+module.exports = { processRequest };

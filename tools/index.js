@@ -11,6 +11,7 @@ const schemas = require('./schemas');
 // Tool implementations
 const readTools = require('./read-tools');
 const writeTools = require('./write-tools');
+const iconTools = require('./icon-tools');
 
 /**
  * Get complete tool catalog
@@ -37,6 +38,11 @@ async function executeTool(name, args, sendProgress, api) {
   // Route to WRITE tools (Phase 3)
   if (writeTools[name]) {
     return await writeTools[name](api, args, sendProgress);
+  }
+
+  // Route to ICON tools
+  if (iconTools[name]) {
+    return await iconTools[name](api, args, sendProgress);
   }
 
   // Tool not found

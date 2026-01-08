@@ -1,10 +1,12 @@
 # Figmatic MCP Server (Standalone)
 
-**Complete, self-contained MCP server for Figma AI Agent Bridge**
+**World-Class MCP Server for Figma AI Agent Bridge**
 
 ✅ **54 Production-Ready MCP Tools** (13 READ + 41 WRITE)
+✅ **Native Stdio Transport** (Industry Standard)
+✅ **Auto-Start with Claude Code** (Zero Manual Setup)
 
-This is a standalone package that bundles everything needed to run an MCP server with Figma Plugin API integration - no external dependencies required.
+This is a cutting-edge, standalone MCP server following the exact same architecture as official MCP servers like @modelcontextprotocol/server-github and @modelcontextprotocol/server-postgres.
 
 ---
 
@@ -12,12 +14,12 @@ This is a standalone package that bundles everything needed to run an MCP server
 
 This standalone package contains:
 
-1. **MCP Server** - Model Context Protocol server (HTTP + SSE) on port 3000
-2. **WebSocket Bridge** - Bidirectional bridge to Figma Desktop on port 8080
+1. **MCP Server** - Native stdio transport (stdin/stdout communication)
+2. **WebSocket Bridge** - Embedded bridge to Figma Desktop on port 8080
 3. **Figma Helper Functions** - 50+ utility functions for common Figma operations
 4. **54 Production-Ready Tools** - Complete CRUD operations for Figma design systems (13 READ + 41 WRITE)
 
-**Everything runs in a single process** - no external servers or dependencies needed.
+**Everything runs in a single process** - Claude Code manages the lifecycle automatically.
 
 ---
 
@@ -65,8 +67,9 @@ mcp-server/
 ### Prerequisites
 
 1. **Node.js 18+**
-2. **Figma Desktop** with "AI Agent Bridge" plugin installed
-3. Plugin configured to connect to `ws://localhost:8080`
+2. **Claude Code CLI** installed
+3. **Figma Desktop** with "AI Agent Bridge" plugin installed
+4. Plugin configured to connect to `ws://localhost:8080`
 
 ### Installation
 
@@ -75,74 +78,200 @@ cd progressive-disclosure-api/mcp-server
 npm install
 ```
 
-### Start Server
+### Setup with Claude Code (One-Time)
 
 ```bash
-npm start
+# Navigate to project root
+cd /Users/kasa/Downloads/Projects/figmatic
+
+# Add MCP server (auto-start enabled)
+claude mcp add --transport stdio figmatic-api --scope project \
+  -- node /Users/kasa/Downloads/Projects/figmatic/progressive-disclosure-api/mcp-server/server.js
 ```
 
-You should see:
+This creates `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "figmatic-api": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/kasa/Downloads/Projects/figmatic/progressive-disclosure-api/mcp-server/server.js"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+### Using the Server
+
+**That's it!** The server auto-starts when you run Claude Code:
+
+```bash
+claude
+```
+
+Within Claude Code, check available tools:
+
+```bash
+/mcp
+```
+
+You'll see 54 tools ready to use. The server runs in the background and automatically shuts down when you exit Claude Code.
+
+### Verify It's Working
+
+Server logs go to **stderr** (visible in terminal):
 
 ```
-╔════════════════════════════════════════╗
-║   Figma AI Bridge WebSocket Server    ║
-╚════════════════════════════════════════╝
-
-Server running on ws://localhost:8080
-Waiting for connections...
-
-╔════════════════════════════════════════╗
-║   Figmatic MCP Server (2024-11-05)    ║
-╚════════════════════════════════════════╝
-
-✅ WebSocket Bridge: ws://localhost:8080
-✅ MCP Server: http://localhost:3000
-
-📋 Tools Available: 26
-✅ MCP Server ready for tool calls
+[2024-01-06T...] ℹ️ ╔════════════════════════════════════════╗
+[2024-01-06T...] ℹ️ ║   Figmatic MCP Server (2024-11-05)    ║
+[2024-01-06T...] ℹ️ ╚════════════════════════════════════════╝
+[2024-01-06T...] ℹ️
+[2024-01-06T...] ℹ️ Transport: Native stdio (industry standard)
+[2024-01-06T...] ℹ️ WebSocket Bridge: ✅ Running on ws://localhost:8080
+[2024-01-06T...] ℹ️ Tools Available: 54 (13 READ + 41 WRITE)
+[2024-01-06T...] ℹ️ MCP Server ready - waiting for stdin...
 ```
 
 ---
 
-## 🔌 Endpoints
+## 🔗 Integration Details
 
-### Health Check
-```bash
-curl http://localhost:3000/health
+### Native Stdio Transport
+
+This server uses **native stdio transport** - the industry standard for MCP servers. It communicates with Claude Code via stdin/stdout, exactly like official MCP servers.
+
+**Architecture:**
+```
+Claude Code (CLI)
+    ↕ stdin/stdout (JSON-RPC)
+MCP Server (server.js)
+    ↓ WebSocket
+Figma Plugin (Figma Desktop)
 ```
 
-Returns:
+**Key Features:**
+- ✅ **Auto-start**: Claude Code launches server automatically
+- ✅ **Auto-shutdown**: Gracefully terminates when Claude Code exits
+- ✅ **Zero configuration**: Works out-of-the-box with `.mcp.json`
+- ✅ **Team-shareable**: Commit `.mcp.json` to git
+- ✅ **Production-ready**: Same architecture as @modelcontextprotocol/* servers
+
+### Management Commands
+
+```bash
+# List all configured MCP servers
+claude mcp list
+
+# Get server details
+claude mcp get figmatic-api
+
+# Remove server (if needed)
+claude mcp remove figmatic-api
+
+# Re-add with different settings
+claude mcp add --transport stdio figmatic-api --scope project \
+  -- node /path/to/server.js
+```
+
+### Team Setup
+
+The `.mcp.json` file is already configured for your project. Team members just need to:
+
+```bash
+# 1. Clone the repo
+git clone <your-repo>
+
+# 2. Install dependencies
+cd progressive-disclosure-api/mcp-server
+npm install
+
+# 3. Start Claude Code (server auto-starts)
+claude
+```
+
+No additional configuration needed! 🎉
+
+---
+
+## ⚙️ Configuration
+
+### Port Configuration
+
+The WebSocket bridge uses **port 8080** by default. If this port is already in use on your system, you can configure a different port via environment variable.
+
+**Option 1: Via `.mcp.json` (Recommended)**
+
+Edit `.mcp.json` to set a custom port:
+
 ```json
 {
-  "status": "ok",
-  "server": "figmatic-mcp-server",
-  "version": "1.0.0",
-  "protocol": "MCP v2024-11-05",
-  "figmaConnected": true,
-  "logging": { ... }
+  "mcpServers": {
+    "figmatic-api": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/kasa/Downloads/Projects/figmatic/progressive-disclosure-api/mcp-server/server.js"
+      ],
+      "env": {
+        "FIGMA_WS_PORT": "8081"
+      }
+    }
+  }
 }
 ```
 
-### Dashboard
-Open in browser: `http://localhost:3000/dashboard`
+**Option 2: Via Shell Environment**
 
-Live monitoring UI showing:
-- Connected status
-- Tool call statistics
-- Real-time logs
-
-### MCP Endpoint
 ```bash
-POST http://localhost:3000/mcp
-Content-Type: application/json
-
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/list",
-  "params": {}
-}
+export FIGMA_WS_PORT=8081
+claude
 ```
+
+**Option 3: Inline (One-time)**
+
+```bash
+FIGMA_WS_PORT=8081 claude
+```
+
+### Port Conflict Error Handling
+
+If you see this error:
+```
+❌ ERROR: Port 8080 is already in use!
+```
+
+The server will automatically provide helpful instructions:
+1. Stop the process using port 8080
+2. Or use a different port by setting `FIGMA_WS_PORT`
+
+**Find what's using the port:**
+```bash
+lsof -i :8080
+```
+
+**Kill the process:**
+```bash
+lsof -ti :8080 | xargs kill -9
+```
+
+**Or use a different port:**
+```bash
+# Edit .mcp.json and change FIGMA_WS_PORT to 8081
+# Then update Figma plugin to connect to ws://localhost:8081
+```
+
+### Environment Variables Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FIGMA_WS_PORT` | `8080` | WebSocket server port for Figma plugin connection |
+
+**Important:** If you change the port, you must also update the Figma plugin configuration to connect to the new port (e.g., `ws://localhost:8081`).
 
 ---
 

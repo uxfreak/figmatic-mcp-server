@@ -5,7 +5,120 @@
  * - Safe font loading
  * - Text style application
  * - Common text configurations
+ * - Font weight name normalization
  */
+
+/**
+ * Normalize font style/weight names to match Figma's available styles
+ *
+ * Maps common UI-friendly weight names (like "SemiBold") to actual font style
+ * names that exist in fonts. Handles the UX friction where designers/developers
+ * expect names they see in Figma's UI dropdown to work in the API.
+ *
+ * @param {string} styleName - Font style/weight name (e.g., "SemiBold", "Bold")
+ * @returns {Array<string>} Array of possible style names to try, in order of preference
+ *
+ * @example
+ * normalizeFontStyle('SemiBold')
+ * // => ['SemiBold', 'Semi Bold', 'Semibold', 'Medium', 'Demi Bold']
+ *
+ * @example
+ * normalizeFontStyle('ExtraBold')
+ * // => ['ExtraBold', 'Extra Bold', 'Extrabold', 'Black', 'Heavy']
+ */
+function normalizeFontStyle(styleName) {
+  if (!styleName || typeof styleName !== 'string') {
+    return ['Regular'];
+  }
+
+  // Normalize input: trim and handle case variations
+  const normalized = styleName.trim();
+
+  // If it's already a standard style, return it with common aliases
+  const standardStyles = {
+    'Thin': ['Thin', 'Hairline', 'Extra Thin'],
+    'ExtraLight': ['ExtraLight', 'Extra Light', 'Extralight', 'Ultra Light', 'UltraLight'],
+    'Light': ['Light'],
+    'Regular': ['Regular', 'Normal', 'Book'],
+    'Medium': ['Medium'],
+    'SemiBold': ['SemiBold', 'Semi Bold', 'Semibold', 'Medium', 'Demi Bold', 'DemiBold'],
+    'Bold': ['Bold'],
+    'ExtraBold': ['ExtraBold', 'Extra Bold', 'Extrabold', 'Black', 'Heavy', 'Ultra Bold', 'UltraBold'],
+    'Black': ['Black', 'Heavy', 'Extra Black', 'ExtraBlack', 'Ultra Black', 'UltraBlack']
+  };
+
+  // Check for exact match first (case-insensitive)
+  for (const [standard, aliases] of Object.entries(standardStyles)) {
+    if (standard.toLowerCase() === normalized.toLowerCase()) {
+      return aliases;
+    }
+  }
+
+  // Check if input matches any alias
+  for (const [standard, aliases] of Object.entries(standardStyles)) {
+    for (const alias of aliases) {
+      if (alias.toLowerCase() === normalized.toLowerCase()) {
+        return aliases;
+      }
+    }
+  }
+
+  // If no match, return the original with some common variations
+  const originalLower = normalized.toLowerCase();
+  const variations = [
+    normalized,                                    // Original as-is
+    normalized.replace(/\s+/g, ''),               // Remove spaces: "Semi Bold" -> "SemiBold"
+    normalized.replace(/([a-z])([A-Z])/g, '$1 $2') // Add spaces: "SemiBold" -> "Semi Bold"
+  ];
+
+  // Add lowercase and title case versions
+  variations.push(
+    normalized.charAt(0).toUpperCase() + normalized.slice(1).toLowerCase() // Title case
+  );
+
+  // Remove duplicates and return
+  return [...new Set(variations)];
+}
+
+/**
+ * Generate JavaScript code for trying multiple font styles with fallback
+ * Returns code that tries each style in order and uses the first that loads successfully
+ *
+ * @param {string} family - Font family name
+ * @param {string} style - Font style/weight name (will be normalized)
+ * @returns {string} JavaScript code for trying font styles
+ *
+ * @example
+ * // Generate code for loading font with SemiBold style
+ * const code = generateFontLoadingCode('Inter', 'SemiBold');
+ * // Returns code that tries: SemiBold, Semi Bold, Semibold, Medium, etc.
+ */
+function generateFontLoadingCode(family, style) {
+  const stylesToTry = normalizeFontStyle(style);
+
+  return `
+// Try multiple font style variations (normalized from "${style}")
+const fontFamily = ${JSON.stringify(family)};
+const stylesToTry = ${JSON.stringify(stylesToTry)};
+let loadedFont = null;
+
+for (const styleVariant of stylesToTry) {
+  try {
+    const fontName = { family: fontFamily, style: styleVariant };
+    await figma.loadFontAsync(fontName);
+    loadedFont = fontName;
+    break; // Success! Use this style
+  } catch (err) {
+    // This style doesn't exist for this font, try next
+    continue;
+  }
+}
+
+if (!loadedFont) {
+  throw new Error(\`Font "\${fontFamily}" does not have any of these styles: \${stylesToTry.join(', ')}. Please check available font styles in Figma.\`);
+}
+`.trim();
+}
 
 /**
  * Create a text node with a text style
@@ -162,6 +275,8 @@ async function updateInstanceText(instanceId, newText, executeInFigmaFn) {
 }
 
 module.exports = {
+  normalizeFontStyle,
+  generateFontLoadingCode,
   createTextWithStyle,
   createTextWithFont,
   updateText,

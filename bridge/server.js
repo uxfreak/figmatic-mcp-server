@@ -40,14 +40,14 @@ let state = createInitialState();
 let wss = null;
 
 // ========================================
-// LOGGER
+// LOGGER (stderr only - stdout is reserved for JSON-RPC)
 // ========================================
 const logger = {
   log: (message) => {
-    console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
+    process.stderr.write(`[${new Date().toLocaleTimeString()}] ${message}\n`);
   },
   error: (message, error) => {
-    console.error(`[${new Date().toLocaleTimeString()}] ${message}`, error);
+    process.stderr.write(`[${new Date().toLocaleTimeString()}] ${message} ${error}\n`);
   }
 };
 
@@ -121,22 +121,38 @@ function handleMessage(ws, message) {
 // ========================================
 // SERVER SETUP
 // ========================================
-function startServer() {
+function startServer(port = null) {
   if (wss) return; // Already started
 
-  wss = new WebSocket.Server({
-    port: 8080,
-    perMessageDeflate: false
-  });
+  // Use provided port, environment variable, or default to 8080
+  const wsPort = port || parseInt(process.env.FIGMA_WS_PORT || '8080', 10);
 
-  // Startup banner
-  console.log('╔════════════════════════════════════════╗');
-  console.log('║   Figma AI Bridge WebSocket Server    ║');
-  console.log('╚════════════════════════════════════════╝');
-  console.log('');
-  console.log('Server running on ws://localhost:8080');
-  console.log('Waiting for connections...');
-  console.log('');
+  try {
+    wss = new WebSocket.Server({
+      port: wsPort,
+      perMessageDeflate: false
+    });
+
+    // Startup banner (to stderr - stdout is reserved for JSON-RPC)
+    process.stderr.write('╔════════════════════════════════════════╗\n');
+    process.stderr.write('║   Figma AI Bridge WebSocket Server    ║\n');
+    process.stderr.write('╚════════════════════════════════════════╝\n');
+    process.stderr.write('\n');
+    process.stderr.write(`Server running on ws://localhost:${wsPort}\n`);
+    process.stderr.write('Waiting for connections...\n');
+    process.stderr.write('\n');
+  } catch (error) {
+    if (error.code === 'EADDRINUSE') {
+      process.stderr.write(`\n❌ ERROR: Port ${wsPort} is already in use!\n\n`);
+      process.stderr.write('To fix this, either:\n');
+      process.stderr.write(`1. Stop the process using port ${wsPort}\n`);
+      process.stderr.write(`2. Use a different port by setting FIGMA_WS_PORT environment variable\n\n`);
+      process.stderr.write('Example:\n');
+      process.stderr.write('  export FIGMA_WS_PORT=8081\n\n');
+      throw error;
+    }
+    throw error;
+  }
 
   // Connection handler
   wss.on('connection', (ws, req) => {
@@ -177,7 +193,7 @@ function startServer() {
     logger.error('Server error:', error);
   });
 
-  console.log('✓ Server initialized successfully\n');
+  process.stderr.write('✓ Server initialized successfully\n\n');
 }
 
 // Start server if this is the main module

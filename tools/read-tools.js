@@ -1210,6 +1210,63 @@ async function validateResponsiveLayout(api, args, sendProgress) {
   return validationResult;
 }
 
+/**
+ * Tool 12: get_page_structure
+ * Get all top-level nodes on current page with optional children
+ */
+async function getPageStructure(api, args, sendProgress) {
+  const { includeChildren = false } = args;
+
+  sendProgress({ status: 'Getting page structure...' });
+
+  const result = await api.executeInFigma(`
+    const page = figma.currentPage;
+
+    const nodes = page.children.map(node => {
+      const nodeData = {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        width: node.width || 0,
+        height: node.height || 0,
+        x: node.x || 0,
+        y: node.y || 0,
+        visible: node.visible,
+        locked: node.locked,
+        childCount: 'children' in node ? node.children.length : 0
+      };
+
+      if (${includeChildren} && 'children' in node) {
+        nodeData.children = node.children.map(child => ({
+          id: child.id,
+          name: child.name,
+          type: child.type,
+          width: child.width || 0,
+          height: child.height || 0,
+          childCount: 'children' in child ? child.children.length : 0
+        }));
+      }
+
+      return nodeData;
+    });
+
+    return {
+      pageName: page.name,
+      pageId: page.id,
+      nodes: nodes,
+      totalNodes: nodes.length
+    };
+  `);
+
+  const pageStructure = result.result || result;
+
+  sendProgress({
+    status: `Found ${pageStructure.totalNodes} top-level nodes on page "${pageStructure.pageName}"`
+  });
+
+  return pageStructure;
+}
+
 module.exports = {
   get_design_system: getDesignSystem,
   get_screenshot: getScreenshot,
@@ -1221,5 +1278,6 @@ module.exports = {
   get_component_variants: getComponentVariants,
   get_nested_instance_tree: getNestedInstanceTree,
   find_nodes_by_name: findNodesByName,
-  validate_responsive_layout: validateResponsiveLayout
+  validate_responsive_layout: validateResponsiveLayout,
+  get_page_structure: getPageStructure
 };

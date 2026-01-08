@@ -362,7 +362,7 @@ const createAutoLayout = {
       },
       fills: {
         type: 'array',
-        description: 'Fill paints (e.g., [{type: "SOLID", color: {r: 0.1, g: 0.1, b: 0.15}}])',
+        description: 'Fill paints. Supports SOLID and GRADIENT types with variable bindings. CSS-like alpha: [{type: "SOLID", color: {r: 0.1, g: 0.1, b: 0.15, a: 0.8}}]. For gradients with variables: [{type: "GRADIENT_LINEAR", gradientStops: [{position: 0, color: {r:1,g:1,b:1,a:1}, boundVariables: {color: {type: "VARIABLE_ALIAS", id: "VariableID:123:456"}}}], gradientTransform: [[1,0,0],[0,1,0]]}]. Tip: Use apply_gradient_fill with colorVariables for easier gradient variable binding.',
         default: []
       },
       cornerRadius: {
@@ -676,7 +676,7 @@ const addChildren = {
             },
             fontStyle: {
               type: 'string',
-              description: 'For text nodes: font style (Regular, Medium, Bold)'
+              description: 'For text nodes: font style. Supports all UI weight names: Thin, ExtraLight, Light, Regular, Medium, SemiBold, Bold, ExtraBold, Black. Automatically tries variations (SemiBold → Semi Bold, Semibold, Medium, etc.) to find available font style.'
             },
             textStyleId: {
               type: 'string',
@@ -764,16 +764,16 @@ const addChildren = {
               enum: ['FIXED', 'AUTO'],
               description: 'For auto-layout frames: cross axis sizing mode'
             },
-            // Responsive sizing (applied to children)
+            // Responsive sizing (applied to children) - Issue #27: Declarative layout sizing
             layoutSizingHorizontal: {
               type: 'string',
               enum: ['FIXED', 'HUG', 'FILL'],
-              description: 'Horizontal sizing mode. For TEXT nodes: automatically sets textAutoResize="HEIGHT" when FILL or FIXED (enables text wrapping). For frames/rectangles: standard sizing behavior.'
+              description: 'Horizontal sizing mode (applied declaratively, takes effect after appendChild). For TEXT nodes: automatically sets textAutoResize="HEIGHT" when FILL or FIXED (enables text wrapping). For frames/rectangles: standard sizing behavior. Specify upfront in child spec - automatically deferred until after parent attachment.'
             },
             layoutSizingVertical: {
               type: 'string',
               enum: ['FIXED', 'HUG', 'FILL'],
-              description: 'Vertical sizing mode. For TEXT nodes: use HUG to allow height to grow with wrapped content. For frames/rectangles: standard sizing behavior.'
+              description: 'Vertical sizing mode (applied declaratively, takes effect after appendChild). For TEXT nodes: use HUG to allow height to grow with wrapped content. For frames/rectangles: standard sizing behavior. Specify upfront in child spec - automatically deferred until after parent attachment.'
             },
             textAutoResize: {
               type: 'string',
@@ -809,11 +809,11 @@ const addChildren = {
             // Appearance
             fills: {
               type: 'array',
-              description: 'Fill paints array'
+              description: 'Fill paints array. Supports SOLID and GRADIENT types with variable bindings. CSS-like alpha: {r, g, b, a: 0.8}. For gradients with variables, include boundVariables in gradientStops. Tip: Use apply_gradient_fill with colorVariables for easier gradient setup.'
             },
             strokes: {
               type: 'array',
-              description: 'Stroke paints array'
+              description: 'Stroke paints array. Supports SOLID and GRADIENT types with variable bindings. CSS-like alpha: {r, g, b, a: 0.8}. For gradients with variables, include boundVariables in gradientStops.'
             },
             strokeWeight: {
               type: 'number',
@@ -938,11 +938,11 @@ EXAMPLE BOTTOM-UP FLOW:
           bottomRightRadius: { type: 'number' },
           fills: {
             type: 'array',
-            description: 'Fill paints'
+            description: 'Fill paints. Supports SOLID and GRADIENT types with variable bindings. CSS-like alpha: {r, g, b, a: 0.8}. For gradients with variables, include boundVariables in gradientStops. Tip: Use apply_gradient_fill with colorVariables for easier gradient setup.'
           },
           strokes: {
             type: 'array',
-            description: 'Stroke paints'
+            description: 'Stroke paints. Supports SOLID and GRADIENT types with variable bindings. CSS-like alpha: {r, g, b, a: 0.8}. For gradients with variables, include boundVariables in gradientStops.'
           },
           strokeWeight: {
             type: 'number'
@@ -1137,6 +1137,21 @@ const validateResponsiveLayout = {
   }
 };
 
+const getPageStructure = {
+  name: 'get_page_structure',
+  description: 'Get all top-level nodes on current page with optional children. Quick page overview without requiring nodeId upfront. Returns page info and all top-level nodes with their properties.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      includeChildren: {
+        type: 'boolean',
+        description: 'Include first-level children of each top-level node',
+        default: false
+      }
+    }
+  }
+};
+
 const modifyNode = {
   name: 'modify_node',
   description: 'Modify properties of an existing node including layout, appearance, and dimensions.',
@@ -1153,11 +1168,11 @@ const modifyNode = {
         properties: {
           fills: {
             type: 'array',
-            description: 'Fill paints (supports SOLID and GRADIENT types: GRADIENT_LINEAR, GRADIENT_RADIAL, GRADIENT_ANGULAR, GRADIENT_DIAMOND). For gradients, must include gradientStops and gradientHandlePositions. Empty array for transparent.'
+            description: 'Fill paints (supports SOLID and GRADIENT types: GRADIENT_LINEAR, GRADIENT_RADIAL, GRADIENT_ANGULAR, GRADIENT_DIAMOND with variable bindings). CSS-like alpha: {r, g, b, a: 0.8}. For gradients with variables, include boundVariables in gradientStops: [{position: 0, color: {r:1,g:1,b:1,a:1}, boundVariables: {color: {type: "VARIABLE_ALIAS", id: "VariableID:123"}}}]. Must include gradientStops and gradientTransform. Empty array for transparent. Tip: Use apply_gradient_fill with colorVariables for easier gradient setup.'
           },
           strokes: {
             type: 'array',
-            description: 'Stroke colors'
+            description: 'Stroke paints (supports SOLID and GRADIENT types with variable bindings). For gradients with variables, include boundVariables in gradientStops.'
           },
           itemSpacing: {
             type: 'number',
@@ -1558,6 +1573,107 @@ const swapComponent = {
   }
 };
 
+const swapInstanceComponent = {
+  name: 'swap_instance_component',
+  description: 'Swap a top-level instance to a different component while preserving overrides. Unlike swap_component which handles nested instances, this tool swaps the instance itself. Uses swapComponent() method which preserves all component property overrides, variable bindings, and custom modifications.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      instanceId: {
+        type: 'string',
+        description: 'Instance node ID to swap (must be type INSTANCE)'
+      },
+      newComponentId: {
+        type: 'string',
+        description: 'Component or ComponentSet ID to swap to'
+      }
+    },
+    required: ['instanceId', 'newComponentId']
+  }
+};
+
+const batchApplyImages = {
+  name: 'batch_apply_images',
+  description: 'Apply images to multiple nodes efficiently in a single batch operation. Imports all images in parallel using Promise.all(), then applies them to nodes. Reduces API calls by 75-95% compared to calling apply_image_fill multiple times. Returns detailed success/error report for each operation.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      imageSpecs: {
+        type: 'array',
+        description: 'Array of image specifications to apply',
+        items: {
+          type: 'object',
+          properties: {
+            nodeId: {
+              type: 'string',
+              description: 'Node ID to apply image to'
+            },
+            imageUrl: {
+              type: 'string',
+              description: 'Image URL (PNG, JPG, or GIF, max 4096x4096px)'
+            },
+            scaleMode: {
+              type: 'string',
+              enum: ['FILL', 'FIT', 'CROP', 'TILE'],
+              description: 'How image fills the node. FILL (default): fills entire area, may crop. FIT: shows full image, may not fill area. CROP: precise positioning with crop parameter. TILE: repeating pattern.',
+              default: 'FILL'
+            },
+            opacity: {
+              type: 'number',
+              description: 'Fill opacity (0-1). Default: 1',
+              minimum: 0,
+              maximum: 1,
+              default: 1
+            },
+            rotation: {
+              type: 'number',
+              description: 'Image rotation in degrees (90° increments only). Default: 0',
+              enum: [0, 90, 180, 270],
+              default: 0
+            },
+            tileScale: {
+              type: 'number',
+              description: 'Tile size multiplier for TILE mode. Default: 1',
+              default: 1
+            },
+            crop: {
+              type: 'object',
+              description: 'Crop offset for CROP mode (normalized 0-1)',
+              properties: {
+                x: {
+                  type: 'number',
+                  minimum: 0,
+                  maximum: 1
+                },
+                y: {
+                  type: 'number',
+                  minimum: 0,
+                  maximum: 1
+                }
+              }
+            },
+            filters: {
+              type: 'object',
+              description: 'Image adjustment filters (all values -1 to 1)',
+              properties: {
+                exposure: { type: 'number', minimum: -1, maximum: 1 },
+                contrast: { type: 'number', minimum: -1, maximum: 1 },
+                saturation: { type: 'number', minimum: -1, maximum: 1 },
+                temperature: { type: 'number', minimum: -1, maximum: 1 },
+                tint: { type: 'number', minimum: -1, maximum: 1 },
+                highlights: { type: 'number', minimum: -1, maximum: 1 },
+                shadows: { type: 'number', minimum: -1, maximum: 1 }
+              }
+            }
+          },
+          required: ['nodeId', 'imageUrl']
+        }
+      }
+    },
+    required: ['imageSpecs']
+  }
+};
+
 const getComponentProperties = {
   name: 'get_component_properties',
   description: 'Get all component property definitions for a component, including property keys, names, types, and default values.',
@@ -1810,7 +1926,7 @@ const createTextStyle = {
       },
       fontStyle: {
         type: 'string',
-        description: 'Font style (e.g., "Regular", "Medium", "SemiBold", "Bold")'
+        description: 'Font style. Supports all UI weight names: Thin, ExtraLight, Light, Regular, Medium, SemiBold, Bold, ExtraBold, Black. Automatically tries variations (e.g., SemiBold → Semi Bold, Semibold, Medium, etc.) to find available font style in the font family.'
       },
       fontSize: {
         type: 'number',
@@ -2074,7 +2190,7 @@ const applyImageFill = {
 
 const applyGradientFill = {
   name: 'apply_gradient_fill',
-  description: 'WORKFLOW: Apply gradient fill to a node with intuitive angle-based API. Supports all gradient types (linear, radial, angular, diamond) with automatic color stop distribution. Accepts hex colors or RGB objects.',
+  description: 'WORKFLOW: Apply gradient fill to a node with intuitive angle-based API. Supports all gradient types (linear, radial, angular, diamond) with automatic color stop distribution. Accepts hex colors, RGB objects, OR variable bindings for theming support.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -2097,7 +2213,7 @@ const applyGradientFill = {
       },
       colors: {
         type: 'array',
-        description: 'Array of colors (minimum 2). Can be hex strings "#FF0000" or objects with color and position {color: "#FF0000", position: 0.5}. Positions auto-distributed if not specified.',
+        description: 'Array of static colors (minimum 2). Can be hex strings "#FF0000" or objects with color and position {color: "#FF0000", position: 0.5}. Positions auto-distributed if not specified. Mutually exclusive with colorVariables.',
         items: {
           oneOf: [
             { type: 'string' },
@@ -2113,6 +2229,24 @@ const applyGradientFill = {
         },
         minItems: 2
       },
+      colorVariables: {
+        type: 'array',
+        description: 'Array of COLOR variables to bind to gradient stops (minimum 2). Each item can be a variable ID/name string, or object with variableId and optional position {variableId: "VariableID:123:456", position: 0.5}. Enables Light/Dark mode theming. Mutually exclusive with colors.',
+        items: {
+          oneOf: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: {
+                variableId: { type: 'string' },
+                position: { type: 'number', minimum: 0, maximum: 1 }
+              },
+              required: ['variableId']
+            }
+          ]
+        },
+        minItems: 2
+      },
       opacity: {
         type: 'number',
         description: 'Gradient opacity (0-1). Default: 1',
@@ -2121,7 +2255,7 @@ const applyGradientFill = {
         maximum: 1
       }
     },
-    required: ['nodeId', 'colors']
+    required: ['nodeId']
   }
 };
 
@@ -2246,6 +2380,127 @@ const copyAllProperties = {
   }
 };
 
+// ICON Tools
+
+const createIconComponent = {
+  name: 'create_icon_component',
+  description: 'Create a single icon component from any Iconify icon set (200+ sets, 275k+ icons). Supports Lucide, Heroicons, Phosphor, Material Design, Tabler, and more. Automatically detects icon type (stroke/fill/duotone) and applies colors correctly.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      iconName: {
+        type: 'string',
+        description: 'Icon name in format "prefix:name" (e.g., "lucide:heart", "heroicons:bell", "phosphor:star"). See https://icon-sets.iconify.design/ for available icons.'
+      },
+      componentName: {
+        type: 'string',
+        description: 'Component name in Figma (e.g., "Icon/Heart"). Default: "Icon/{Name}" based on icon name.'
+      },
+      size: {
+        type: 'number',
+        default: 24,
+        description: 'Icon size in pixels. Default: 24'
+      },
+      color: {
+        type: 'string',
+        description: 'Hex color (e.g., "#FF0000"). Applied as stroke (outline icons) or fill (solid icons). Optional.'
+      },
+      colorVariable: {
+        type: 'string',
+        description: 'Design token variable name (e.g., "Colors/Primary"). Alternative to color parameter. Binds color to variable for theming support. Optional.'
+      },
+      variant: {
+        type: 'string',
+        enum: ['outline', 'solid', 'filled', 'duotone', 'thin', 'light', 'regular', 'bold'],
+        description: 'Icon style variant. Support varies by icon set: Lucide (outline only), Heroicons (outline/solid), Phosphor (all variants), Material (outline/filled). Tool auto-maps to icon set naming. Optional.'
+      },
+      strokeWidth: {
+        type: 'number',
+        description: 'Fixed stroke width in pixels (does not scale). Follows design system optical sizing best practices. If not specified, auto-calculated: 16-20px icons → 1px, 21-28px → 1.5px, 29px+ → 2px. Optional.'
+      }
+    },
+    required: ['iconName']
+  }
+};
+
+const batchCreateIcons = {
+  name: 'batch_create_icons',
+  description: 'Create multiple icon components in one operation. Optionally create as variants in a ComponentSet. Fetches all icons in parallel for performance. Supports mixing different icon sets, sizes, and colors.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      icons: {
+        type: 'array',
+        description: 'Array of icon specifications. Each can have custom iconName, variant, size, color, colorVariable, componentName.',
+        items: {
+          type: 'object',
+          properties: {
+            iconName: {
+              type: 'string',
+              description: 'Icon name in format "prefix:name" (required)'
+            },
+            variant: {
+              type: 'string',
+              enum: ['outline', 'solid', 'filled', 'duotone', 'thin', 'light', 'regular', 'bold'],
+              description: 'Icon variant (optional, inherits from parent)'
+            },
+            size: {
+              type: 'number',
+              description: 'Icon size in pixels (optional, inherits from parent)'
+            },
+            color: {
+              type: 'string',
+              description: 'Hex color (optional, inherits from parent)'
+            },
+            colorVariable: {
+              type: 'string',
+              description: 'Design token variable (optional, inherits from parent)'
+            },
+            componentName: {
+              type: 'string',
+              description: 'Custom component name (optional, auto-generated if omitted)'
+            },
+            strokeWidth: {
+              type: 'number',
+              description: 'Fixed stroke width in pixels for this icon (optional, inherits from parent)'
+            }
+          },
+          required: ['iconName']
+        },
+        minItems: 1
+      },
+      size: {
+        type: 'number',
+        default: 24,
+        description: 'Default size for all icons (can be overridden per icon). Default: 24'
+      },
+      baseColor: {
+        type: 'string',
+        description: 'Default hex color for all icons (can be overridden per icon). Optional.'
+      },
+      baseColorVariable: {
+        type: 'string',
+        description: 'Default design token variable for all icons (can be overridden per icon). Optional.'
+      },
+      baseStrokeWidth: {
+        type: 'number',
+        description: 'Default fixed stroke width in pixels for all icons (can be overridden per icon). Follows optical sizing best practices if not specified. Optional.'
+      },
+      createComponentSet: {
+        type: 'boolean',
+        default: false,
+        description: 'Combine all icons into a ComponentSet with variants. Requires 2+ icons. Default: false (creates separate components)'
+      },
+      componentSetName: {
+        type: 'string',
+        default: 'Icons',
+        description: 'Name for ComponentSet if createComponentSet=true. Default: "Icons"'
+      }
+    },
+    required: ['icons']
+  }
+};
+
 // Export all schemas
 
 function getAllSchemas() {
@@ -2262,6 +2517,7 @@ function getAllSchemas() {
     getNestedInstanceTree,
     findNodesByName,
     validateResponsiveLayout,
+    getPageStructure,
     getComponentProperties,
     getInstanceProperties,
     // WRITE tools
@@ -2279,6 +2535,8 @@ function getAllSchemas() {
     modifyNode,
     batchModifyNodes,
     swapComponent,
+    swapInstanceComponent,
+    batchApplyImages,
     renameNode,
     // COMPONENT PROPERTY tools
     addComponentProperty,
@@ -2310,9 +2568,41 @@ function getAllSchemas() {
     copyBindings,
     copyAllProperties,
     // UTILITY tools
-    executeFigmaScript
+    executeFigmaScript,
+    // ICON tools
+    searchIcons,
+    createIconComponent,
+    batchCreateIcons
   ];
 }
+
+const searchIcons = {
+  name: 'search_icons',
+  description: 'Search for icons across all Iconify icon sets (200+ sets, 275k+ icons). Returns matching icon names that can be used with create_icon_component or batch_create_icons.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Search query (e.g., "heart", "arrow", "settings"). Case insensitive.'
+      },
+      limit: {
+        type: 'number',
+        default: 64,
+        description: 'Maximum number of results to return (min: 32, max: 999). Default: 64'
+      },
+      prefix: {
+        type: 'string',
+        description: 'Optional: Restrict results to specific icon set (e.g., "lucide", "heroicons", "phosphor")'
+      },
+      category: {
+        type: 'string',
+        description: 'Optional: Filter by category (e.g., "arrows", "charts", "social")'
+      }
+    },
+    required: ['query']
+  }
+};
 
 module.exports = {
   getAllSchemas,
@@ -2328,6 +2618,7 @@ module.exports = {
   getNestedInstanceTree,
   findNodesByName,
   validateResponsiveLayout,
+  getPageStructure,
   getComponentProperties,
   getInstanceProperties,
   createComponent,
@@ -2343,6 +2634,8 @@ module.exports = {
   modifyNode,
   batchModifyNodes,
   swapComponent,
+  swapInstanceComponent,
+  batchApplyImages,
   renameNode,
   addComponentProperty,
   editComponentProperty,
@@ -2369,5 +2662,8 @@ module.exports = {
   exposeNestedInstanceByPath,
   copyBindings,
   copyAllProperties,
-  executeFigmaScript
+  executeFigmaScript,
+  createIconComponent,
+  batchCreateIcons,
+  searchIcons
 };
