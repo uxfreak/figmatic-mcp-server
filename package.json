@@ -2,11 +2,14 @@
   "name": "@figmatic/mcp-server",
   "version": "1.0.0",
   "description": "Standalone MCP server for Figma AI Agent Bridge - Progressive Disclosure API with WebSocket bridge",
-  "main": "server.js",
+  "main": "server.mjs",
+  "bin": {
+    "figmatic-mcp-server": "./server.mjs"
+  },
   "scripts": {
-    "start": "node server.js",
+    "start": "node server.mjs",
     "test": "node test.js",
-    "dev": "NODE_ENV=development node server.js"
+    "dev": "NODE_ENV=development node server.mjs"
   },
   "keywords": [
     "mcp",
@@ -23,6 +26,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
     "express": "^4.18.2",
     "ws": "^8.18.3"
   },
