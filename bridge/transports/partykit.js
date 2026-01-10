@@ -4,6 +4,7 @@
  */
 
 const { PartySocket } = require('partysocket');
+const { createSessionWatcher } = require('../config/sessionWatcher');
 
 const FILE_TIMEOUT_MS = 30000; // 30 seconds - remove files that haven't announced
 
@@ -32,6 +33,7 @@ function createPartyKitTransport(options) {
   let activeFileId = null;
   let discoveredFiles = new Map(); // fileId -> { fileName, lastSeen }
   let sessionProxy = null; // Proxy object that looks like WebSocket
+  let sessionWatcher = null; // Config file watcher
 
   /**
    * Create a proxy object that mimics WebSocket interface
@@ -103,6 +105,39 @@ function createPartyKitTransport(options) {
   }
 
   /**
+   * Switch to a different session room
+   * @param {string} fileId - File ID to switch to
+   * @param {string} reason - Reason for switching (for logging)
+   */
+  function switchToSession(fileId, reason = 'manual') {
+    if (fileId === activeFileId) {
+      logger.log(`Already connected to file: ${fileId}`);
+      return;
+    }
+
+    // Check if file exists in discovered files
+    const fileInfo = discoveredFiles.get(fileId);
+    if (!fileInfo) {
+      logger.log(`⚠️ File ${fileId} not in discovered files (${reason})`);
+      logger.log(`   Available files: ${Array.from(discoveredFiles.keys()).join(', ')}`);
+      // Still attempt to connect - file might be valid even if not discovered yet
+    }
+
+    logger.log(`🔄 Switching to file: ${fileInfo?.fileName || fileId} (${fileId}) - ${reason}`);
+
+    // Notify parent that old session is disconnecting
+    if (sessionProxy && onDisconnection) {
+      onDisconnection(sessionProxy);
+    }
+
+    // Update active file
+    activeFileId = fileId;
+
+    // Connect to new session room
+    connectToSessionRoom(fileId);
+  }
+
+  /**
    * Handle file announcement from discovery room
    */
   function handleFileAnnouncement(fileId, fileName) {
@@ -117,9 +152,7 @@ function createPartyKitTransport(options) {
 
       // If no active file, auto-select this one
       if (!activeFileId) {
-        logger.log(`🔄 Auto-selecting file: ${fileName} (${fileId})`);
-        activeFileId = fileId;
-        connectToSessionRoom(fileId);
+        switchToSession(fileId, 'auto-discovery');
       }
     }
   }
@@ -150,9 +183,7 @@ function createPartyKitTransport(options) {
           const files = Array.from(discoveredFiles.entries());
           if (files.length > 0) {
             const [newFileId, newFileInfo] = files[0];
-            logger.log(`🔄 Switching to file: ${newFileInfo.fileName} (${newFileId})`);
-            activeFileId = newFileId;
-            connectToSessionRoom(newFileId);
+            switchToSession(newFileId, 'stale-file-recovery');
           } else {
             logger.log(`⚠️ No active files available`);
           }
@@ -232,6 +263,15 @@ function createPartyKitTransport(options) {
       // Connect to discovery room
       connectToDiscoveryRoom();
 
+      // Start session config file watcher
+      sessionWatcher = createSessionWatcher({
+        logger,
+        onSessionChange: (fileId, fileName) => {
+          switchToSession(fileId, 'config-file');
+        }
+      });
+      sessionWatcher.start();
+
       logger.log('✓ PartyKit transport initialized successfully\n');
     },
 
@@ -240,6 +280,11 @@ function createPartyKitTransport(options) {
      */
     stop() {
       logger.log('Stopping PartyKit transport...');
+
+      if (sessionWatcher) {
+        sessionWatcher.stop();
+        sessionWatcher = null;
+      }
 
       if (discoverySocket) {
         discoverySocket.close();
