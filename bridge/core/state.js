@@ -104,8 +104,16 @@ function clearPendingRequests(state) {
  * @returns {boolean}
  */
 function isClientConnected(state) {
-  return state.figmaClient !== null &&
-         state.figmaClient.readyState === 1; // WebSocket.OPEN
+  if (state.figmaClient === null) return false;
+
+  // Handle PartyKit proxy object (has isPartyKit flag)
+  if (state.figmaClient.isPartyKit) {
+    // PartyKit proxy is connected if it has a send function
+    return typeof state.figmaClient.send === 'function';
+  }
+
+  // Handle regular WebSocket (check readyState)
+  return state.figmaClient.readyState === 1; // WebSocket.OPEN
 }
 
 /**

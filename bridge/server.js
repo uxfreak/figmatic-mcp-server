@@ -3,7 +3,6 @@
  * Clean, modular, testable architecture
  */
 
-const WebSocket = require('ws');
 const { createInitialState, setFigmaClient, removePendingRequest, clearPendingRequests } = require('./core/state');
 const { processMessage } = require('./core/messageHandler');
 const { executeInFigma } = require('./api/execute');
@@ -32,12 +31,13 @@ const {
   bindVariableToPaint,
   getBoundVariables
 } = require('./api/variablesAdvanced');
+const { createTransport, getTransportMode } = require('./transports');
 
 // ========================================
 // STATE
 // ========================================
 let state = createInitialState();
-let wss = null;
+let transport = null;
 
 // ========================================
 // LOGGER (stderr only - stdout is reserved for JSON-RPC)
@@ -66,15 +66,15 @@ function createContext() {
 // ========================================
 // MESSAGE PROCESSOR
 // ========================================
-function handleMessage(ws, message) {
+function handleMessage(client, message) {
   const action = processMessage(message);
 
   if (!action) return;
 
   switch (action.type) {
     case 'SET_FIGMA_CLIENT':
-      state = setFigmaClient(state, ws);
-      logger.log('✓ Figma plugin connected successfully!');
+      state = setFigmaClient(state, client);
+      logger.log('✓ Figma plugin authenticated successfully!');
       logger.log('✓ Bridge is now active - AI agents can send commands\n');
       break;
 
@@ -119,81 +119,55 @@ function handleMessage(ws, message) {
 }
 
 // ========================================
+// TRANSPORT CALLBACKS
+// ========================================
+function onConnection(client) {
+  // Client connected, but not authenticated yet
+  // Wait for handshake message to set figmaClient in state
+  logger.log('Client connected to transport');
+}
+
+function onDisconnection(client) {
+  // Check if this was the authenticated Figma client
+  if (client === state.figmaClient) {
+    state = setFigmaClient(state, null);
+    logger.log('⚠ Figma plugin disconnected - waiting for reconnection...\n');
+
+    // Reject all pending requests
+    const { state: cleanedState, resolvers } = clearPendingRequests(state);
+    state = cleanedState;
+
+    resolvers.forEach(resolver => {
+      resolver.reject(new Error('Figma plugin disconnected'));
+    });
+  }
+}
+
+function onMessage(client, message) {
+  // Pass the client reference so handleMessage can update state with it
+  handleMessage(client, message);
+}
+
+// ========================================
 // SERVER SETUP
 // ========================================
 function startServer(port = null) {
-  if (wss) return; // Already started
-
-  // Use provided port, environment variable, or default to 8080
-  const wsPort = port || parseInt(process.env.FIGMA_WS_PORT || '8080', 10);
-
-  try {
-    wss = new WebSocket.Server({
-      port: wsPort,
-      perMessageDeflate: false
-    });
-
-    // Startup banner (to stderr - stdout is reserved for JSON-RPC)
-    process.stderr.write('╔════════════════════════════════════════╗\n');
-    process.stderr.write('║   Figma AI Bridge WebSocket Server    ║\n');
-    process.stderr.write('╚════════════════════════════════════════╝\n');
-    process.stderr.write('\n');
-    process.stderr.write(`Server running on ws://localhost:${wsPort}\n`);
-    process.stderr.write('Waiting for connections...\n');
-    process.stderr.write('\n');
-  } catch (error) {
-    if (error.code === 'EADDRINUSE') {
-      process.stderr.write(`\n❌ ERROR: Port ${wsPort} is already in use!\n\n`);
-      process.stderr.write('To fix this, either:\n');
-      process.stderr.write(`1. Stop the process using port ${wsPort}\n`);
-      process.stderr.write(`2. Use a different port by setting FIGMA_WS_PORT environment variable\n\n`);
-      process.stderr.write('Example:\n');
-      process.stderr.write('  export FIGMA_WS_PORT=8081\n\n');
-      throw error;
-    }
-    throw error;
+  if (transport) {
+    logger.log('Transport already started');
+    return;
   }
 
-  // Connection handler
-  wss.on('connection', (ws, req) => {
-    const clientIp = req.socket.remoteAddress;
-    logger.log(`New client connected from ${clientIp}`);
-
-    // Message handler
-    ws.on('message', (message) => {
-      handleMessage(ws, message);
-    });
-
-    // Disconnect handler
-    ws.on('close', () => {
-      logger.log('Client disconnected');
-
-      if (ws === state.figmaClient) {
-        state = setFigmaClient(state, null);
-        logger.log('⚠ Figma plugin disconnected - waiting for reconnection...\n');
-
-        // Reject all pending requests
-        const { state: cleanedState, resolvers } = clearPendingRequests(state);
-        state = cleanedState;
-
-        resolvers.forEach(resolver => {
-          resolver.reject(new Error('Figma plugin disconnected'));
-        });
-      }
-    });
-
-    // Error handler
-    ws.on('error', (error) => {
-      logger.error('WebSocket error:', error);
-    });
+  // Create transport based on FIGMATIC_MODE
+  transport = createTransport({
+    onConnection,
+    onDisconnection,
+    onMessage,
+    logger,
+    port
   });
 
-  // Server error handler
-  wss.on('error', (error) => {
-    logger.error('Server error:', error);
-  });
-
-  process.stderr.write('✓ Server initialized successfully\n\n');
+  // Start transport
+  transport.start();
 }
 
 // Start server if this is the main module
